@@ -52,10 +52,15 @@ export type AppViewState = {
   assistantAgentId: string | null;
   sessionKey: string;
   chatLoading: boolean;
+  chatUsageLoading: boolean;
   chatSending: boolean;
   chatMessage: string;
   chatAttachments: ChatAttachment[];
   chatMessages: unknown[];
+  chatUsageLastTurnTokens: number | null;
+  chatUsageLastTurnCost: number | null;
+  chatUsageCumulativeTokens: number | null;
+  chatUsageCumulativeCost: number | null;
   chatToolMessages: unknown[];
   chatStream: string | null;
   chatStreamStartedAt: number | null;

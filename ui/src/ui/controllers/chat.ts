@@ -8,8 +8,13 @@ export type ChatState = {
   connected: boolean;
   sessionKey: string;
   chatLoading: boolean;
+  chatUsageLoading: boolean;
   chatMessages: unknown[];
   chatThinkingLevel: string | null;
+  chatUsageLastTurnTokens: number | null;
+  chatUsageLastTurnCost: number | null;
+  chatUsageCumulativeTokens: number | null;
+  chatUsageCumulativeCost: number | null;
   chatSending: boolean;
   chatMessage: string;
   chatAttachments: ChatAttachment[];
@@ -27,6 +32,101 @@ export type ChatEventPayload = {
   errorMessage?: string;
 };
 
+type SessionUsageTimePoint = {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  totalTokens?: number;
+  cost?: number;
+  cumulativeTokens?: number;
+  cumulativeCost?: number;
+};
+
+function finiteNumber(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return null;
+  }
+  return value;
+}
+
+function clampNonNegative(value: number | null): number | null {
+  if (value == null) {
+    return null;
+  }
+  return Math.max(0, value);
+}
+
+function readPointNumber(point: SessionUsageTimePoint, key: keyof SessionUsageTimePoint): number {
+  return clampNonNegative(finiteNumber(point[key])) ?? 0;
+}
+
+function readPointTokens(point: SessionUsageTimePoint): number | null {
+  const total = clampNonNegative(finiteNumber(point.totalTokens));
+  if (total != null) {
+    return Math.round(total);
+  }
+  const fallback =
+    readPointNumber(point, "input") +
+    readPointNumber(point, "output") +
+    readPointNumber(point, "cacheRead") +
+    readPointNumber(point, "cacheWrite");
+  return fallback > 0 ? Math.round(fallback) : null;
+}
+
+function clearChatUsageSummary(state: ChatState) {
+  state.chatUsageLastTurnTokens = null;
+  state.chatUsageLastTurnCost = null;
+  state.chatUsageCumulativeTokens = null;
+  state.chatUsageCumulativeCost = null;
+}
+
+function applyChatUsagePoint(state: ChatState, point: SessionUsageTimePoint) {
+  const turnTokens = readPointTokens(point);
+  const cumulativeTokens = clampNonNegative(finiteNumber(point.cumulativeTokens));
+  const turnCost = clampNonNegative(finiteNumber(point.cost));
+  const cumulativeCost = clampNonNegative(finiteNumber(point.cumulativeCost));
+
+  state.chatUsageLastTurnTokens = turnTokens;
+  state.chatUsageCumulativeTokens =
+    cumulativeTokens != null ? Math.round(cumulativeTokens) : turnTokens;
+  state.chatUsageLastTurnCost = turnCost;
+  state.chatUsageCumulativeCost = cumulativeCost ?? turnCost;
+}
+
+export async function loadChatUsageSummary(state: ChatState) {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  const sessionKey = state.sessionKey;
+  state.chatUsageLoading = true;
+  try {
+    const res = await state.client.request<{ points?: SessionUsageTimePoint[] }>(
+      "sessions.usage.timeseries",
+      { key: sessionKey },
+    );
+    if (state.sessionKey !== sessionKey) {
+      return;
+    }
+    const points = Array.isArray(res?.points) ? res.points : [];
+    const lastPoint = points.length > 0 ? points[points.length - 1] : null;
+    if (!lastPoint) {
+      clearChatUsageSummary(state);
+      return;
+    }
+    applyChatUsagePoint(state, lastPoint);
+  } catch {
+    if (state.sessionKey !== sessionKey) {
+      return;
+    }
+    clearChatUsageSummary(state);
+  } finally {
+    if (state.sessionKey === sessionKey) {
+      state.chatUsageLoading = false;
+    }
+  }
+}
+
 export async function loadChatHistory(state: ChatState) {
   if (!state.client || !state.connected) {
     return;
@@ -43,6 +143,7 @@ export async function loadChatHistory(state: ChatState) {
     );
     state.chatMessages = Array.isArray(res.messages) ? res.messages : [];
     state.chatThinkingLevel = res.thinkingLevel ?? null;
+    await loadChatUsageSummary(state);
   } catch (err) {
     state.lastError = String(err);
   } finally {

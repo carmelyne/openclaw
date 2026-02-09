@@ -1,12 +1,23 @@
-import { describe, expect, it } from "vitest";
-import { handleChatEvent, type ChatEventPayload, type ChatState } from "./chat.ts";
+import { describe, expect, it, vi } from "vitest";
+import {
+  handleChatEvent,
+  loadChatHistory,
+  loadChatUsageSummary,
+  type ChatEventPayload,
+  type ChatState,
+} from "./chat.ts";
 
 function createState(overrides: Partial<ChatState> = {}): ChatState {
   return {
     chatAttachments: [],
     chatLoading: false,
+    chatUsageLoading: false,
     chatMessage: "",
     chatMessages: [],
+    chatUsageLastTurnTokens: null,
+    chatUsageLastTurnCost: null,
+    chatUsageCumulativeTokens: null,
+    chatUsageCumulativeCost: null,
     chatRunId: null,
     chatSending: false,
     chatStream: null,
@@ -212,5 +223,89 @@ describe("handleChatEvent", () => {
     expect(state.chatStream).toBe(null);
     expect(state.chatStreamStartedAt).toBe(null);
     expect(state.chatMessages).toEqual([existingMessage]);
+  });
+});
+
+describe("loadChatUsageSummary", () => {
+  it("loads latest turn + cumulative usage from timeseries", async () => {
+    const request = vi.fn().mockResolvedValue({
+      points: [
+        {
+          totalTokens: 42,
+          cost: 0.0008,
+          cumulativeTokens: 42,
+          cumulativeCost: 0.0008,
+        },
+        {
+          totalTokens: 128,
+          cost: 0.0024,
+          cumulativeTokens: 170,
+          cumulativeCost: 0.0032,
+        },
+      ],
+    });
+    const state = createState({
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+      sessionKey: "main",
+    });
+
+    await loadChatUsageSummary(state);
+
+    expect(request).toHaveBeenCalledWith("sessions.usage.timeseries", { key: "main" });
+    expect(state.chatUsageLastTurnTokens).toBe(128);
+    expect(state.chatUsageLastTurnCost).toBe(0.0024);
+    expect(state.chatUsageCumulativeTokens).toBe(170);
+    expect(state.chatUsageCumulativeCost).toBe(0.0032);
+    expect(state.chatUsageLoading).toBe(false);
+  });
+
+  it("clears usage summary when no timeseries points exist", async () => {
+    const request = vi.fn().mockResolvedValue({ points: [] });
+    const state = createState({
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+      sessionKey: "main",
+      chatUsageLastTurnTokens: 12,
+      chatUsageCumulativeTokens: 500,
+    });
+
+    await loadChatUsageSummary(state);
+
+    expect(state.chatUsageLastTurnTokens).toBeNull();
+    expect(state.chatUsageLastTurnCost).toBeNull();
+    expect(state.chatUsageCumulativeTokens).toBeNull();
+    expect(state.chatUsageCumulativeCost).toBeNull();
+  });
+});
+
+describe("loadChatHistory", () => {
+  it("loads history and usage summary without surfacing usage errors", async () => {
+    const request = vi.fn().mockImplementation(async (method: string) => {
+      if (method === "chat.history") {
+        return {
+          messages: [{ role: "assistant", content: [{ type: "text", text: "hi" }] }],
+          thinkingLevel: "medium",
+        };
+      }
+      if (method === "sessions.usage.timeseries") {
+        throw new Error("no timeseries");
+      }
+      return {};
+    });
+    const state = createState({
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+      sessionKey: "main",
+      lastError: "older error",
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatLoading).toBe(false);
+    expect(state.lastError).toBeNull();
+    expect(state.chatThinkingLevel).toBe("medium");
+    expect(Array.isArray(state.chatMessages)).toBe(true);
+    expect(state.chatUsageCumulativeTokens).toBeNull();
   });
 });

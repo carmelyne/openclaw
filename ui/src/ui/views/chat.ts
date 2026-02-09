@@ -27,10 +27,15 @@ export type ChatProps = {
   thinkingLevel: string | null;
   showThinking: boolean;
   loading: boolean;
+  usageLoading?: boolean;
   sending: boolean;
   canAbort?: boolean;
   compactionStatus?: CompactionIndicatorStatus | null;
   messages: unknown[];
+  usageLastTurnTokens?: number | null;
+  usageLastTurnCost?: number | null;
+  usageCumulativeTokens?: number | null;
+  usageCumulativeCost?: number | null;
   toolMessages: unknown[];
   stream: string | null;
   streamStartedAt: number | null;
@@ -105,6 +110,64 @@ function renderCompactionIndicator(status: CompactionIndicatorStatus | null | un
   }
 
   return nothing;
+}
+
+function formatUsageTokens(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "—";
+  }
+  const rounded = Math.max(0, Math.round(value));
+  return rounded.toLocaleString();
+}
+
+function formatUsageCost(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "—";
+  }
+  const amount = Math.max(0, value);
+  if (amount === 0) {
+    return "$0.00";
+  }
+  if (amount < 0.01) {
+    return `$${amount.toFixed(4)}`;
+  }
+  if (amount < 1) {
+    return `$${amount.toFixed(3)}`;
+  }
+  return `$${amount.toFixed(2)}`;
+}
+
+function renderUsageMeter(props: ChatProps) {
+  const isLoading = Boolean(props.usageLoading);
+  const hasSummary =
+    typeof props.usageLastTurnTokens === "number" ||
+    typeof props.usageLastTurnCost === "number" ||
+    typeof props.usageCumulativeTokens === "number" ||
+    typeof props.usageCumulativeCost === "number";
+  const note = isLoading
+    ? "Updating usage…"
+    : hasSummary
+      ? "Approximate cost based on model pricing."
+      : "Usage appears after the first assistant response.";
+  return html`
+    <div class="chat-usage-meter" role="status" aria-live="polite">
+      <div class="chat-usage-meter__row">
+        <span class="chat-usage-meter__label">This turn</span>
+        <span class="chat-usage-meter__value">
+          ${formatUsageTokens(props.usageLastTurnTokens)} tokens ·
+          ~${formatUsageCost(props.usageLastTurnCost)}
+        </span>
+      </div>
+      <div class="chat-usage-meter__row">
+        <span class="chat-usage-meter__label">Session total</span>
+        <span class="chat-usage-meter__value">
+          ${formatUsageTokens(props.usageCumulativeTokens)} tokens ·
+          ~${formatUsageCost(props.usageCumulativeCost)}
+        </span>
+      </div>
+      <div class="chat-usage-meter__note">${note}</div>
+    </div>
+  `;
 }
 
 function generateAttachmentId(): string {
@@ -367,6 +430,8 @@ export function renderChat(props: ChatProps) {
           `
           : nothing
       }
+
+      ${renderUsageMeter(props)}
 
       <div class="chat-compose">
         ${renderAttachmentPreview(props)}
