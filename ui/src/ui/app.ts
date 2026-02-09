@@ -124,9 +124,14 @@ export class OpenClawApp extends LitElement {
 
   @state() sessionKey = this.settings.sessionKey;
   @state() chatLoading = false;
+  @state() chatUsageLoading = false;
   @state() chatSending = false;
   @state() chatMessage = "";
   @state() chatMessages: unknown[] = [];
+  @state() chatUsageLastTurnTokens: number | null = null;
+  @state() chatUsageLastTurnCost: number | null = null;
+  @state() chatUsageCumulativeTokens: number | null = null;
+  @state() chatUsageCumulativeCost: number | null = null;
   @state() chatToolMessages: unknown[] = [];
   @state() chatStream: string | null = null;
   @state() chatStreamStartedAt: number | null = null;

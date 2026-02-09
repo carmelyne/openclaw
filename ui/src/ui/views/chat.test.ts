@@ -20,10 +20,15 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
     thinkingLevel: null,
     showThinking: false,
     loading: false,
+    usageLoading: false,
     sending: false,
     canAbort: false,
     compactionStatus: null,
     messages: [],
+    usageLastTurnTokens: null,
+    usageLastTurnCost: null,
+    usageCumulativeTokens: null,
+    usageCumulativeCost: null,
     toolMessages: [],
     stream: null,
     streamStartedAt: null,
@@ -153,5 +158,29 @@ describe("chat view", () => {
     newSessionButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onNewSession).toHaveBeenCalledTimes(1);
     expect(container.textContent).not.toContain("Stop");
+  });
+
+  it("renders token and cost usage meter above composer", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          usageLastTurnTokens: 321,
+          usageLastTurnCost: 0.0042,
+          usageCumulativeTokens: 12_345,
+          usageCumulativeCost: 0.58,
+        }),
+      ),
+      container,
+    );
+
+    const meter = container.querySelector(".chat-usage-meter");
+    expect(meter).not.toBeNull();
+    expect(meter?.textContent).toContain("This turn");
+    expect(meter?.textContent).toContain("321");
+    expect(meter?.textContent).toContain("Session total");
+    expect(meter?.textContent).toContain("12,345");
+    expect(meter?.textContent).toContain("~$0.0042");
+    expect(meter?.textContent).toContain("~$0.580");
   });
 });
