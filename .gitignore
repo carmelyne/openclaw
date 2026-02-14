@@ -76,3 +76,10 @@ USER.md
 .agent/*.json
 !.agent/workflows/
 local/
+
+# Local workspace/private session data
+workspace/
+.openclaw-local/
+__pycache__/
+ask.py
+runner/
