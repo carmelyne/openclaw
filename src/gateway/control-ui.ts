@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveControlUiRootSync } from "../infra/control-ui-assets.js";
 import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
 import {
@@ -17,6 +18,8 @@ import {
 } from "./control-ui-shared.js";
 
 const ROOT_PREFIX = "/";
+const WORKSPACE_AUDIO_PREFIX = "/workspace/audio/";
+const WORKSPACE_AUDIO_EXTENSIONS = new Set([".wav", ".mp3", ".ogg", ".m4a", ".flac", ".aac"]);
 
 export type ControlUiRequestOptions = {
   basePath?: string;
@@ -56,6 +59,18 @@ function contentTypeForExt(ext: string): string {
       return "image/x-icon";
     case ".txt":
       return "text/plain; charset=utf-8";
+    case ".wav":
+      return "audio/wav";
+    case ".mp3":
+      return "audio/mpeg";
+    case ".ogg":
+      return "audio/ogg";
+    case ".m4a":
+      return "audio/mp4";
+    case ".flac":
+      return "audio/flac";
+    case ".aac":
+      return "audio/aac";
     default:
       return "application/octet-stream";
   }
@@ -186,6 +201,55 @@ function isSafeRelativePath(relPath: string) {
   return true;
 }
 
+function resolveWorkspaceAudioPathnamePrefix(basePath: string): string {
+  return basePath ? `${basePath}${WORKSPACE_AUDIO_PREFIX}` : WORKSPACE_AUDIO_PREFIX;
+}
+
+type WorkspaceAudioResolution =
+  | { kind: "not-request" }
+  | { kind: "invalid" }
+  | { kind: "file"; filePath: string };
+
+function isInsideDir(rootDir: string, candidatePath: string): boolean {
+  const root = path.resolve(rootDir);
+  const target = path.resolve(candidatePath);
+  if (target === root) {
+    return true;
+  }
+  return target.startsWith(root + path.sep);
+}
+
+function resolveWorkspaceAudioFile(
+  pathname: string,
+  opts: ControlUiRequestOptions | undefined,
+  basePath: string,
+): WorkspaceAudioResolution {
+  const pathPrefix = resolveWorkspaceAudioPathnamePrefix(basePath);
+  if (!pathname.startsWith(pathPrefix)) {
+    return { kind: "not-request" };
+  }
+  const cfg = opts?.config;
+  if (!cfg) {
+    return { kind: "invalid" };
+  }
+  const rel = pathname.slice(pathPrefix.length);
+  if (!rel || rel.endsWith("/") || !isSafeRelativePath(rel)) {
+    return { kind: "invalid" };
+  }
+  const ext = path.extname(rel).toLowerCase();
+  if (!WORKSPACE_AUDIO_EXTENSIONS.has(ext)) {
+    return { kind: "invalid" };
+  }
+  const agentId = opts?.agentId?.trim() || resolveDefaultAgentId(cfg);
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+  const audioRoot = path.resolve(path.join(workspaceDir, "audio"));
+  const filePath = path.resolve(path.join(audioRoot, rel));
+  if (!isInsideDir(audioRoot, filePath)) {
+    return { kind: "invalid" };
+  }
+  return { kind: "file", filePath };
+}
+
 export function handleControlUiHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -228,6 +292,27 @@ export function handleControlUiHttpRequest(
   }
 
   applyControlUiSecurityHeaders(res);
+  const workspaceAudio = resolveWorkspaceAudioFile(pathname, opts, basePath);
+  if (workspaceAudio.kind === "invalid") {
+    respondNotFound(res);
+    return true;
+  }
+  if (workspaceAudio.kind === "file") {
+    const filePath = workspaceAudio.filePath;
+    if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+      respondNotFound(res);
+      return true;
+    }
+    if (req.method === "HEAD") {
+      res.statusCode = 200;
+      res.setHeader("Content-Type", contentTypeForExt(path.extname(filePath).toLowerCase()));
+      res.setHeader("Cache-Control", "no-cache");
+      res.end();
+      return true;
+    }
+    serveFile(res, filePath);
+    return true;
+  }
 
   const bootstrapConfigPath = basePath
     ? `${basePath}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`

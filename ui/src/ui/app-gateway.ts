@@ -27,6 +27,7 @@ import {
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import { GatewayBrowserClient } from "./gateway.ts";
+import { isChatWindowFocused, playNotificationSound } from "./notification-sounds.ts";
 
 type GatewayHost = {
   settings: UiSettings;
@@ -62,6 +63,8 @@ type SessionDefaultsSnapshot = {
   mainSessionKey?: string;
   scope?: string;
 };
+
+const chatStartSoundPlayedForRun = new Set<string>();
 
 function normalizeSessionKeyForDefaults(
   value: string | undefined,
@@ -214,10 +217,22 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
       );
     }
     const state = handleChatEvent(host as unknown as OpenClawApp, payload);
+    const runId = payload?.runId?.trim();
+    if (state === "delta" && runId && !chatStartSoundPlayedForRun.has(runId)) {
+      chatStartSoundPlayedForRun.add(runId);
+      if (!isChatWindowFocused()) {
+        void playNotificationSound("start");
+      }
+    }
     if (state === "final" || state === "error" || state === "aborted") {
+      if (runId) {
+        chatStartSoundPlayedForRun.delete(runId);
+      }
+      if (state === "final" && isChatWindowFocused()) {
+        void playNotificationSound("end");
+      }
       resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
       void flushChatQueueForEvent(host as unknown as Parameters<typeof flushChatQueueForEvent>[0]);
-      const runId = payload?.runId;
       if (runId && host.refreshSessionsAfterChat.has(runId)) {
         host.refreshSessionsAfterChat.delete(runId);
         if (state === "final") {
