@@ -86,3 +86,8 @@ USER.md
 !.agent/workflows/
 /local/
 package-lock.json
+# Local workspace/private session data
+workspace/
+.openclaw-local/
+ask.py
+runner/
