@@ -21,6 +21,7 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
     showThinking: false,
     loading: false,
     usageLoading: false,
+    usageExpanded: true,
     sending: false,
     canAbort: false,
     compactionStatus: null,
@@ -45,6 +46,7 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
     assistantAvatar: null,
     onRefresh: () => undefined,
     onToggleFocusMode: () => undefined,
+    onToggleUsage: () => undefined,
     onDraftChange: () => undefined,
     onSend: () => undefined,
     onQueueRemove: () => undefined,
@@ -182,5 +184,21 @@ describe("chat view", () => {
     expect(meter?.textContent).toContain("12,345");
     expect(meter?.textContent).toContain("~$0.0042");
     expect(meter?.textContent).toContain("~$0.580");
+  });
+
+  it("hides usage meter when collapsed and keeps toggle visible", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          usageExpanded: false,
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-usage-meter")).toBeNull();
+    const toggle = container.querySelector(".chat-usage-toggle");
+    expect(toggle).not.toBeNull();
   });
 });

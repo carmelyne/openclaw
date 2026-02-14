@@ -27,6 +27,7 @@ export type ChatProps = {
   showThinking: boolean;
   loading: boolean;
   usageLoading?: boolean;
+  usageExpanded?: boolean;
   sending: boolean;
   canAbort?: boolean;
   compactionStatus?: CompactionIndicatorStatus | null;
@@ -64,6 +65,7 @@ export type ChatProps = {
   // Event handlers
   onRefresh: () => void;
   onToggleFocusMode: () => void;
+  onToggleUsage?: () => void;
   onDraftChange: (next: string) => void;
   onSend: () => void;
   onAbort?: () => void;
@@ -137,6 +139,10 @@ function formatUsageCost(value: number | null | undefined): string {
 }
 
 function renderUsageMeter(props: ChatProps) {
+  const expanded = props.usageExpanded ?? true;
+  if (!expanded) {
+    return nothing;
+  }
   const isLoading = Boolean(props.usageLoading);
   const hasSummary =
     typeof props.usageLastTurnTokens === "number" ||
@@ -153,15 +159,25 @@ function renderUsageMeter(props: ChatProps) {
       <div class="chat-usage-meter__row">
         <span class="chat-usage-meter__label">This turn</span>
         <span class="chat-usage-meter__value">
-          ${formatUsageTokens(props.usageLastTurnTokens)} tokens ·
-          ~${formatUsageCost(props.usageLastTurnCost)}
+          <span class="chat-usage-meter__tokens">
+            ${formatUsageTokens(props.usageLastTurnTokens)} tokens
+          </span>
+          <span class="chat-usage-meter__sep">·</span>
+          <span class="chat-usage-meter__cost chat-usage-meter__cost--muted">
+            ~${formatUsageCost(props.usageLastTurnCost)}
+          </span>
         </span>
       </div>
       <div class="chat-usage-meter__row">
         <span class="chat-usage-meter__label">Session total</span>
         <span class="chat-usage-meter__value">
-          ${formatUsageTokens(props.usageCumulativeTokens)} tokens ·
-          ~${formatUsageCost(props.usageCumulativeCost)}
+          <span class="chat-usage-meter__tokens">
+            ${formatUsageTokens(props.usageCumulativeTokens)} tokens
+          </span>
+          <span class="chat-usage-meter__sep">·</span>
+          <span class="chat-usage-meter__cost">
+            ~${formatUsageCost(props.usageCumulativeCost)}
+          </span>
         </span>
       </div>
       <div class="chat-usage-meter__note">${note}</div>
@@ -429,6 +445,19 @@ export function renderChat(props: ChatProps) {
           `
           : nothing
       }
+
+      <div class="chat-compose-tools">
+        <button
+          class="btn btn--sm btn--icon chat-usage-toggle ${(props.usageExpanded ?? true) ? "active" : ""}"
+          type="button"
+          title="${(props.usageExpanded ?? true) ? "Hide usage panel" : "Show usage panel"}"
+          aria-label="${(props.usageExpanded ?? true) ? "Hide usage panel" : "Show usage panel"}"
+          aria-pressed=${props.usageExpanded ?? true}
+          @click=${() => props.onToggleUsage?.()}
+        >
+          ${icons.barChart}
+        </button>
+      </div>
 
       ${renderUsageMeter(props)}
 

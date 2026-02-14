@@ -61,6 +61,7 @@ export type AppViewState = {
   chatUsageLastTurnCost: number | null;
   chatUsageCumulativeTokens: number | null;
   chatUsageCumulativeCost: number | null;
+  chatUsageExpanded: boolean;
   chatToolMessages: unknown[];
   chatStream: string | null;
   chatStreamStartedAt: number | null;

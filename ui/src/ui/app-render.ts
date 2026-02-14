@@ -1087,6 +1087,7 @@ export function renderApp(state: AppViewState) {
                 usageLastTurnCost: state.chatUsageLastTurnCost,
                 usageCumulativeTokens: state.chatUsageCumulativeTokens,
                 usageCumulativeCost: state.chatUsageCumulativeCost,
+                usageExpanded: state.chatUsageExpanded,
                 toolMessages: state.chatToolMessages,
                 stream: state.chatStream,
                 streamStartedAt: state.chatStreamStartedAt,
@@ -1110,6 +1111,9 @@ export function renderApp(state: AppViewState) {
                     ...state.settings,
                     chatFocusMode: !state.settings.chatFocusMode,
                   });
+                },
+                onToggleUsage: () => {
+                  state.chatUsageExpanded = !state.chatUsageExpanded;
                 },
                 onChatScroll: (event) => state.handleChatScroll(event),
                 onDraftChange: (next) => (state.chatMessage = next),
