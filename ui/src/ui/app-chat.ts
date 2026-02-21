@@ -25,6 +25,7 @@ export type ChatHost = {
 };
 
 export const CHAT_SESSIONS_ACTIVE_MINUTES = 120;
+const CHAT_SEND_PREFIX = "💚 Besh";
 
 export function isChatBusy(host: ChatHost) {
   return host.chatSending || Boolean(host.chatRunId);
@@ -60,6 +61,36 @@ function isChatResetCommand(text: string) {
   return normalized.startsWith("/new ") || normalized.startsWith("/reset ");
 }
 
+function isSlashCommand(text: string) {
+  return text.startsWith("/");
+}
+
+function prependChatPrefix(text: string) {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return "";
+  }
+  if (trimmed.toLowerCase().startsWith(CHAT_SEND_PREFIX.toLowerCase())) {
+    return trimmed;
+  }
+  return `${CHAT_SEND_PREFIX} ${trimmed}`;
+}
+
+function buildOutboundChatMessage(
+  rawMessage: string,
+  opts?: { messageOverride?: string },
+): { sendText: string; displayText: string } {
+  const trimmed = rawMessage.trim();
+  if (!trimmed) {
+    return { sendText: "", displayText: "" };
+  }
+  if (opts?.messageOverride != null || isSlashCommand(trimmed)) {
+    return { sendText: trimmed, displayText: trimmed };
+  }
+  const displayText = prependChatPrefix(trimmed);
+  return { sendText: displayText, displayText };
+}
+
 export async function handleAbortChat(host: ChatHost) {
   if (!host.connected) {
     return;
@@ -73,6 +104,7 @@ function enqueueChatMessage(
   text: string,
   attachments?: ChatAttachment[],
   refreshSessions?: boolean,
+  displayText?: string,
 ) {
   const trimmed = text.trim();
   const hasAttachments = Boolean(attachments && attachments.length > 0);
@@ -84,6 +116,7 @@ function enqueueChatMessage(
     {
       id: generateUUID(),
       text: trimmed,
+      displayText: displayText?.trim() || undefined,
       createdAt: Date.now(),
       attachments: hasAttachments ? attachments?.map((att) => ({ ...att })) : undefined,
       refreshSessions,
@@ -101,10 +134,13 @@ async function sendChatMessageNow(
     previousAttachments?: ChatAttachment[];
     restoreAttachments?: boolean;
     refreshSessions?: boolean;
+    displayMessage?: string;
   },
 ) {
   resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
-  const runId = await sendChatMessage(host as unknown as OpenClawApp, message, opts?.attachments);
+  const runId = await sendChatMessage(host as unknown as OpenClawApp, message, opts?.attachments, {
+    displayMessage: opts?.displayMessage,
+  });
   const ok = Boolean(runId);
   if (!ok && opts?.previousDraft != null) {
     host.chatMessage = opts.previousDraft;
@@ -146,6 +182,7 @@ async function flushChatQueue(host: ChatHost) {
   const ok = await sendChatMessageNow(host, next.text, {
     attachments: next.attachments,
     refreshSessions: next.refreshSessions,
+    displayMessage: next.displayText,
   });
   if (!ok) {
     host.chatQueue = [next, ...host.chatQueue];
@@ -165,21 +202,25 @@ export async function handleSendChat(
     return;
   }
   const previousDraft = host.chatMessage;
-  const message = (messageOverride ?? host.chatMessage).trim();
+  const rawMessage = messageOverride ?? host.chatMessage;
+  const normalizedMessage = rawMessage.trim();
   const attachments = host.chatAttachments ?? [];
   const attachmentsToSend = messageOverride == null ? attachments : [];
   const hasAttachments = attachmentsToSend.length > 0;
 
   // Allow sending with just attachments (no message text required)
-  if (!message && !hasAttachments) {
+  if (!normalizedMessage && !hasAttachments) {
     return;
   }
 
-  if (isChatStopCommand(message)) {
+  if (isChatStopCommand(normalizedMessage)) {
     await handleAbortChat(host);
     return;
   }
 
+  const outbound = buildOutboundChatMessage(rawMessage, { messageOverride });
+  const message = outbound.sendText;
+  const displayMessage = outbound.displayText;
   const refreshSessions = isChatResetCommand(message);
   if (messageOverride == null) {
     host.chatMessage = "";
@@ -188,11 +229,12 @@ export async function handleSendChat(
   }
 
   if (isChatBusy(host)) {
-    enqueueChatMessage(host, message, attachmentsToSend, refreshSessions);
+    enqueueChatMessage(host, message, attachmentsToSend, refreshSessions, displayMessage);
     return;
   }
 
   await sendChatMessageNow(host, message, {
+    displayMessage,
     previousDraft: messageOverride == null ? previousDraft : undefined,
     restoreDraft: Boolean(messageOverride && opts?.restoreDraft),
     attachments: hasAttachments ? attachmentsToSend : undefined,

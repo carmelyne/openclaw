@@ -81,6 +81,8 @@ describe("handleChatEvent", () => {
       },
     };
     expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toHaveLength(1);
+    expect(state.chatMessages[0]).toEqual(payload.message);
     expect(state.chatRunId).toBe("run-user");
     expect(state.chatStream).toBe("Working...");
     expect(state.chatStreamStartedAt).toBe(123);
@@ -99,6 +101,31 @@ describe("handleChatEvent", () => {
       state: "final",
     };
     expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatRunId).toBe(null);
+    expect(state.chatStream).toBe(null);
+    expect(state.chatStreamStartedAt).toBe(null);
+  });
+
+  it("appends final assistant message for own run", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatMessages: [{ role: "user", content: [{ type: "text", text: "hello" }] }],
+      chatStream: "Reply",
+      chatStreamStartedAt: 100,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Done" }],
+      },
+    };
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toHaveLength(2);
+    expect(state.chatMessages[1]).toEqual(payload.message);
     expect(state.chatRunId).toBe(null);
     expect(state.chatStream).toBe(null);
     expect(state.chatStreamStartedAt).toBe(null);

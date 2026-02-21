@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { formatToolOutputForSidebar, getTruncatedPreview } from "./tool-helpers.ts";
+import {
+  formatToolOutputForPreview,
+  formatToolOutputForSidebar,
+  getTruncatedPreview,
+} from "./tool-helpers.ts";
 
 describe("tool-helpers", () => {
   describe("formatToolOutputForSidebar", () => {
@@ -74,6 +78,55 @@ describe("tool-helpers", () => {
     it("handles whitespace-only string", () => {
       const result = formatToolOutputForSidebar("   ");
       expect(result).toBe("   ");
+    });
+
+    it("compacts memory_search JSON payloads into readable summary", () => {
+      const input = JSON.stringify({
+        results: [
+          {
+            path: "memory/chat-a.md",
+            startLine: 10,
+            endLine: 20,
+            score: 0.9123,
+            snippet: "first snippet",
+          },
+          {
+            path: "memory/chat-b.md",
+            startLine: 5,
+            endLine: 5,
+            score: 0.8123,
+            snippet: "second snippet",
+          },
+        ],
+        provider: "openai",
+        model: "nomic-embed-text",
+      });
+      const result = formatToolOutputForSidebar(input, "memory_search");
+
+      expect(result).toContain("Memory hits: 2 · provider: openai · model: nomic-embed-text");
+      expect(result).toContain("Use memory_get(path, from?, lines?) for exact lines.");
+      expect(result).toContain("1. memory/chat-a.md#L10-L20 · score 0.912");
+      expect(result).not.toContain("```json");
+      expect(result).not.toContain('"results"');
+    });
+  });
+
+  describe("formatToolOutputForPreview", () => {
+    it("returns compact summary for memory_search JSON", () => {
+      const input = JSON.stringify({
+        results: [
+          { path: "memory/chat-a.md", startLine: 1, endLine: 1, score: 0.5, snippet: "hello" },
+        ],
+      });
+      const result = formatToolOutputForPreview(input, "memory_search");
+      expect(result).toContain("Memory hits: 1");
+      expect(result).toContain("memory/chat-a.md#L1");
+    });
+
+    it("returns original text for non-memory tools", () => {
+      const input = '{"ok":true}';
+      const result = formatToolOutputForPreview(input, "read");
+      expect(result).toBe(input);
     });
   });
 

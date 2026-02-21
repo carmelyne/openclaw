@@ -1,7 +1,8 @@
+import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
-import type { MemorySearchResult } from "../../memory/types.js";
+import type { MemoryProviderStatus, MemorySearchResult } from "../../memory/types.js";
 import type { AnyAgentTool } from "./common.js";
 import { resolveMemoryBackendConfig } from "../../memory/backend-config.js";
 import { getMemorySearchManager } from "../../memory/index.js";
@@ -21,6 +22,19 @@ const MemoryGetSchema = Type.Object({
   from: Type.Optional(Type.Number()),
   lines: Type.Optional(Type.Number()),
 });
+
+const MEMORY_SEARCH_VISIBLE_RESULTS = 4;
+const MEMORY_SEARCH_SNIPPET_MAX_CHARS = 220;
+
+type MemorySearchPayload = {
+  results: MemorySearchResult[];
+  provider?: string;
+  model?: string;
+  fallback?: MemoryProviderStatus["fallback"];
+  citations?: MemoryCitationsMode;
+  disabled?: boolean;
+  error?: string;
+};
 
 function resolveMemoryToolContext(options: { config?: OpenClawConfig; agentSessionKey?: string }) {
   const cfg = options.config;
@@ -61,7 +75,11 @@ export function createMemorySearchTool(options: {
         agentId,
       });
       if (!manager) {
-        return jsonResult({ results: [], disabled: true, error });
+        return memorySearchResult({
+          results: [],
+          disabled: true,
+          error,
+        });
       }
       try {
         const citationsMode = resolveMemoryCitationsMode(cfg);
@@ -81,7 +99,7 @@ export function createMemorySearchTool(options: {
           status.backend === "qmd"
             ? clampResultsByInjectedChars(decorated, resolved.qmd?.limits.maxInjectedChars)
             : decorated;
-        return jsonResult({
+        return memorySearchResult({
           results,
           provider: status.provider,
           model: status.model,
@@ -90,7 +108,11 @@ export function createMemorySearchTool(options: {
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        return jsonResult({ results: [], disabled: true, error: message });
+        return memorySearchResult({
+          results: [],
+          disabled: true,
+          error: message,
+        });
       }
     },
   };
@@ -218,4 +240,54 @@ function deriveChatTypeFromSessionKey(sessionKey?: string): "direct" | "group" |
     return "group";
   }
   return "direct";
+}
+
+function memorySearchResult(payload: MemorySearchPayload): AgentToolResult<unknown> {
+  return {
+    content: [{ type: "text", text: formatMemorySearchText(payload) }],
+    details: payload,
+  };
+}
+
+function formatMemorySearchText(payload: MemorySearchPayload): string {
+  const provider = payload.provider ?? "unknown";
+  const model = payload.model ?? "unknown";
+  if (payload.disabled) {
+    const error = payload.error?.trim() ? payload.error.trim() : "disabled";
+    return `Memory search unavailable: ${error}`;
+  }
+
+  const summary = `Memory hits: ${payload.results.length} · provider: ${provider} · model: ${model}`;
+  if (payload.results.length === 0) {
+    return `${summary}\nNo matches found.`;
+  }
+
+  const visible = payload.results.slice(0, MEMORY_SEARCH_VISIBLE_RESULTS);
+  const lines = [summary];
+  lines.push("Use memory_get(path, from?, lines?) for exact lines.");
+  if (payload.results.length > visible.length) {
+    lines.push(`Showing top ${visible.length} of ${payload.results.length} results.`);
+  }
+  for (const [index, entry] of visible.entries()) {
+    const citation = entry.citation ?? formatCitation(entry);
+    const score = Number.isFinite(entry.score) ? entry.score.toFixed(3) : "n/a";
+    lines.push(`${index + 1}. ${citation} · score ${score}`);
+    const snippet = compactSnippet(entry.snippet, MEMORY_SEARCH_SNIPPET_MAX_CHARS);
+    if (snippet) {
+      lines.push(`   ${snippet}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+function compactSnippet(snippet: string, maxChars: number): string {
+  const withoutSource = snippet.replace(/\n+\s*Source:\s+[^\n]+$/i, "").trim();
+  const compact = withoutSource.replace(/\s+/g, " ").trim();
+  if (!compact) {
+    return "";
+  }
+  if (compact.length <= maxChars) {
+    return compact;
+  }
+  return `${compact.slice(0, Math.max(0, maxChars - 1)).trimEnd()}…`;
 }

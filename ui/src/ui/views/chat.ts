@@ -140,7 +140,7 @@ function formatUsageCost(value: number | null | undefined): string {
 }
 
 function renderUsageMeter(props: ChatProps) {
-  const expanded = props.usageExpanded ?? true;
+  const expanded = props.usageExpanded ?? false;
   if (!expanded) {
     return nothing;
   }
@@ -184,6 +184,10 @@ function renderUsageMeter(props: ChatProps) {
       <div class="chat-usage-meter__note">${note}</div>
     </div>
   `;
+}
+
+function asTrimmedString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
 }
 
 function generateAttachmentId(): string {
@@ -270,11 +274,21 @@ export function renderChat(props: ChatProps) {
   const isBusy = props.sending || props.stream !== null;
   const canAbort = Boolean(props.canAbort && props.onAbort);
   const activeSession = props.sessions?.sessions?.find((row) => row.key === props.sessionKey);
+  const activeModel = asTrimmedString(activeSession?.model);
+  const activeProvider = asTrimmedString(activeSession?.modelProvider);
+  const defaultModel = asTrimmedString(props.sessions?.defaults?.model);
+  const activeModelLabel = !props.sessions
+    ? "loading..."
+    : activeModel
+      ? activeModel.includes("/") || !activeProvider
+        ? activeModel
+        : `${activeProvider}/${activeModel}`
+      : defaultModel || "unknown";
   const reasoningLevel = activeSession?.reasoningLevel ?? "off";
   const showReasoning = props.showThinking && reasoningLevel !== "off";
   const assistantIdentity = {
     name: props.assistantName,
-    avatar: props.assistantAvatar ?? props.assistantAvatarUrl ?? null,
+    avatar: props.assistantAvatarUrl ?? props.assistantAvatar ?? null,
   };
 
   const hasAttachments = (props.attachments?.length ?? 0) > 0;
@@ -332,7 +346,7 @@ export function renderChat(props: ChatProps) {
               onOpenSidebar: props.onOpenSidebar,
               showReasoning,
               assistantName: props.assistantName,
-              assistantAvatar: assistantIdentity.avatar,
+              assistantAvatar: item.assistantAvatar ?? assistantIdentity.avatar,
             });
           }
 
@@ -410,6 +424,7 @@ export function renderChat(props: ChatProps) {
                     <div class="chat-queue__item">
                       <div class="chat-queue__text">
                         ${
+                          item.displayText ||
                           item.text ||
                           (item.attachments?.length ? `Image (${item.attachments.length})` : "")
                         }
@@ -448,12 +463,15 @@ export function renderChat(props: ChatProps) {
       }
 
       <div class="chat-compose-tools">
+        <span class="chip chat-model-chip" title=${`Active model: ${activeModelLabel}`}>
+          Model: ${activeModelLabel}
+        </span>
         <button
-          class="btn btn--sm btn--icon chat-usage-toggle ${(props.usageExpanded ?? true) ? "active" : ""}"
+          class="btn btn--sm btn--icon chat-usage-toggle ${(props.usageExpanded ?? false) ? "active" : ""}"
           type="button"
-          title="${(props.usageExpanded ?? true) ? "Hide usage panel" : "Show usage panel"}"
-          aria-label="${(props.usageExpanded ?? true) ? "Hide usage panel" : "Show usage panel"}"
-          aria-pressed=${props.usageExpanded ?? true}
+          title="${(props.usageExpanded ?? false) ? "Hide usage panel" : "Show usage panel"}"
+          aria-label="${(props.usageExpanded ?? false) ? "Hide usage panel" : "Show usage panel"}"
+          aria-pressed=${props.usageExpanded ?? false}
           @click=${() => props.onToggleUsage?.()}
         >
           ${icons.barChart}
@@ -522,6 +540,46 @@ export function renderChat(props: ChatProps) {
 }
 
 const CHAT_HISTORY_RENDER_LIMIT = 200;
+const ASSISTANT_AVATAR_SNAPSHOT_MAX = 1000;
+const assistantAvatarSnapshotByMessageKey = new Map<string, string>();
+
+function extractAssistantAvatarSnapshot(message: unknown): string | null {
+  if (typeof message !== "object" || message === null) {
+    return null;
+  }
+  const raw = message as Record<string, unknown>;
+  const value =
+    typeof raw.__openclawAssistantAvatar === "string" ? raw.__openclawAssistantAvatar.trim() : "";
+  return value || null;
+}
+
+function withAssistantAvatarSnapshot(message: unknown, avatar: string | null): unknown {
+  if (!avatar || typeof message !== "object" || message === null) {
+    return message;
+  }
+  const raw = message as Record<string, unknown>;
+  const existing =
+    typeof raw.__openclawAssistantAvatar === "string" ? raw.__openclawAssistantAvatar.trim() : "";
+  if (existing === avatar) {
+    return message;
+  }
+  return { ...raw, __openclawAssistantAvatar: avatar };
+}
+
+function pruneAssistantAvatarSnapshots(activeKeys: Set<string>) {
+  for (const key of assistantAvatarSnapshotByMessageKey.keys()) {
+    if (!activeKeys.has(key)) {
+      assistantAvatarSnapshotByMessageKey.delete(key);
+    }
+  }
+  while (assistantAvatarSnapshotByMessageKey.size > ASSISTANT_AVATAR_SNAPSHOT_MAX) {
+    const oldest = assistantAvatarSnapshotByMessageKey.keys().next().value;
+    if (typeof oldest !== "string") {
+      break;
+    }
+    assistantAvatarSnapshotByMessageKey.delete(oldest);
+  }
+}
 
 function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
   const result: Array<ChatItem | MessageGroup> = [];
@@ -540,8 +598,14 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
     const normalized = normalizeMessage(item.message);
     const role = normalizeRoleForGrouping(normalized.role);
     const timestamp = normalized.timestamp || Date.now();
+    const assistantAvatar =
+      role === "assistant" ? extractAssistantAvatarSnapshot(item.message) : null;
 
-    if (!currentGroup || currentGroup.role !== role) {
+    if (
+      !currentGroup ||
+      currentGroup.role !== role ||
+      (role === "assistant" && currentGroup.assistantAvatar !== assistantAvatar)
+    ) {
       if (currentGroup) {
         result.push(currentGroup);
       }
@@ -550,6 +614,7 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
         key: `group:${role}:${item.key}`,
         role,
         messages: [{ message: item.message, key: item.key }],
+        assistantAvatar: role === "assistant" ? assistantAvatar : undefined,
         timestamp,
         isStreaming: false,
       };
@@ -568,6 +633,8 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
   const items: ChatItem[] = [];
   const history = Array.isArray(props.messages) ? props.messages : [];
   const tools = Array.isArray(props.toolMessages) ? props.toolMessages : [];
+  const assistantAvatar = props.assistantAvatarUrl?.trim() || null;
+  const activeAssistantKeys = new Set<string>();
   const historyStart = Math.max(0, history.length - CHAT_HISTORY_RENDER_LIMIT);
   if (historyStart > 0) {
     items.push({
@@ -602,12 +669,32 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
       continue;
     }
 
+    const role = normalizeRoleForGrouping(normalized.role);
+    const key = messageKey(msg, i);
+    let messageWithAvatar = msg;
+    if (role === "assistant") {
+      activeAssistantKeys.add(key);
+      let snapshot =
+        extractAssistantAvatarSnapshot(msg) ?? assistantAvatarSnapshotByMessageKey.get(key) ?? null;
+      if (!snapshot) {
+        snapshot = assistantAvatar;
+      }
+      if (snapshot) {
+        if (assistantAvatarSnapshotByMessageKey.has(key)) {
+          assistantAvatarSnapshotByMessageKey.delete(key);
+        }
+        assistantAvatarSnapshotByMessageKey.set(key, snapshot);
+        messageWithAvatar = withAssistantAvatarSnapshot(msg, snapshot);
+      }
+    }
+
     items.push({
       kind: "message",
-      key: messageKey(msg, i),
-      message: msg,
+      key,
+      message: messageWithAvatar,
     });
   }
+  pruneAssistantAvatarSnapshots(activeAssistantKeys);
   if (props.showThinking) {
     for (let i = 0; i < tools.length; i++) {
       items.push({

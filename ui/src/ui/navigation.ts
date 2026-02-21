@@ -1,7 +1,6 @@
 import type { IconName } from "./icons.js";
 
 export const TAB_GROUPS = [
-  { label: "Chat", tabs: ["chat"] },
   {
     label: "Control",
     tabs: ["overview", "channels", "instances", "sessions", "usage", "cron"],

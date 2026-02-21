@@ -57,6 +57,154 @@ export type ExplicitGatewayAuth = {
   password?: string;
 };
 
+type GatewayAttemptError = Error & {
+  retryableTransportFailure?: boolean;
+};
+
+type CallGatewayAttemptOptions = {
+  opts: CallGatewayOptions;
+  connectionDetails: GatewayConnectionDetails;
+  timeoutMs: number;
+  safeTimerTimeoutMs: number;
+  url: string;
+  token?: string;
+  password?: string;
+  tlsFingerprint?: string;
+};
+
+function markRetryableTransportFailure(error: Error): GatewayAttemptError {
+  const tagged = error as GatewayAttemptError;
+  tagged.retryableTransportFailure = true;
+  return tagged;
+}
+
+function isRetryableTransportFailure(error: unknown): error is GatewayAttemptError {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as GatewayAttemptError).retryableTransportFailure === true
+  );
+}
+
+function buildLoopbackFallbackDetails(params: {
+  config: OpenClawConfig;
+  configPath?: string;
+}): GatewayConnectionDetails {
+  return buildGatewayConnectionDetails({
+    config: {
+      ...params.config,
+      gateway: {
+        ...params.config.gateway,
+        bind: "loopback",
+      },
+    },
+    ...(params.configPath ? { configPath: params.configPath } : {}),
+  });
+}
+
+async function callGatewayAttempt<T>(options: CallGatewayAttemptOptions): Promise<T> {
+  const {
+    opts,
+    connectionDetails,
+    timeoutMs,
+    safeTimerTimeoutMs,
+    url,
+    token,
+    password,
+    tlsFingerprint,
+  } = options;
+  const formatCloseError = (code: number, reason: string) => {
+    const reasonText = reason?.trim() || "no close reason";
+    const hint =
+      code === 1006 ? "abnormal closure (no close frame)" : code === 1000 ? "normal closure" : "";
+    const suffix = hint ? ` ${hint}` : "";
+    return new Error(
+      `gateway closed (${code}${suffix}): ${reasonText}\n${connectionDetails.message}`,
+    );
+  };
+  const formatTimeoutError = () =>
+    new Error(`gateway timeout after ${timeoutMs}ms\n${connectionDetails.message}`);
+  const formatConnectError = (err: Error) =>
+    new Error(`gateway connect error: ${err.message}\n${connectionDetails.message}`);
+
+  return await new Promise<T>((resolve, reject) => {
+    let settled = false;
+    let ignoreClose = false;
+    let requestStarted = false;
+    const stop = (err?: Error, value?: T) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      if (err) {
+        reject(err);
+      } else {
+        resolve(value as T);
+      }
+    };
+
+    const client = new GatewayClient({
+      url,
+      token,
+      password,
+      tlsFingerprint,
+      instanceId: opts.instanceId ?? randomUUID(),
+      clientName: opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI,
+      clientDisplayName: opts.clientDisplayName,
+      clientVersion: opts.clientVersion ?? "dev",
+      platform: opts.platform,
+      mode: opts.mode ?? GATEWAY_CLIENT_MODES.CLI,
+      role: "operator",
+      scopes: ["operator.admin", "operator.approvals", "operator.pairing"],
+      deviceIdentity: loadOrCreateDeviceIdentity(),
+      minProtocol: opts.minProtocol ?? PROTOCOL_VERSION,
+      maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,
+      onConnectError: (err) => {
+        if (settled || ignoreClose) {
+          return;
+        }
+        ignoreClose = true;
+        client.stop();
+        stop(markRetryableTransportFailure(formatConnectError(err)));
+      },
+      onHelloOk: async () => {
+        try {
+          requestStarted = true;
+          const result = await client.request<T>(opts.method, opts.params, {
+            expectFinal: opts.expectFinal,
+          });
+          ignoreClose = true;
+          stop(undefined, result);
+          client.stop();
+        } catch (err) {
+          ignoreClose = true;
+          client.stop();
+          stop(err as Error);
+        }
+      },
+      onClose: (code, reason) => {
+        if (settled || ignoreClose) {
+          return;
+        }
+        ignoreClose = true;
+        client.stop();
+        const closeError = formatCloseError(code, reason);
+        stop(requestStarted ? closeError : markRetryableTransportFailure(closeError));
+      },
+    });
+
+    const timer = setTimeout(() => {
+      ignoreClose = true;
+      client.stop();
+      const timeoutError = formatTimeoutError();
+      stop(requestStarted ? timeoutError : markRetryableTransportFailure(timeoutError));
+    }, safeTimerTimeoutMs);
+
+    client.start();
+  });
+}
+
 export function resolveExplicitGatewayAuth(opts?: ExplicitGatewayAuth): ExplicitGatewayAuth {
   const token =
     typeof opts?.token === "string" && opts.token.trim().length > 0 ? opts.token.trim() : undefined;
@@ -231,80 +379,60 @@ export async function callGateway<T = Record<string, unknown>>(
             ? authPassword.trim()
             : undefined)
       : undefined);
+  const bindMode = config.gateway?.bind ?? "loopback";
+  const localScheme = config.gateway?.tls?.enabled === true ? "wss" : "ws";
+  const loopbackUrl = `${localScheme}://127.0.0.1:${resolveGatewayPort(config)}`;
+  const canFallbackToLoopback =
+    !urlOverride && !remoteUrl && !isRemoteMode && bindMode === "lan" && url !== loopbackUrl;
 
-  const formatCloseError = (code: number, reason: string) => {
-    const reasonText = reason?.trim() || "no close reason";
-    const hint =
-      code === 1006 ? "abnormal closure (no close frame)" : code === 1000 ? "normal closure" : "";
-    const suffix = hint ? ` ${hint}` : "";
-    return `gateway closed (${code}${suffix}): ${reasonText}\n${connectionDetails.message}`;
-  };
-  const formatTimeoutError = () =>
-    `gateway timeout after ${timeoutMs}ms\n${connectionDetails.message}`;
-  return await new Promise<T>((resolve, reject) => {
-    let settled = false;
-    let ignoreClose = false;
-    const stop = (err?: Error, value?: T) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timer);
-      if (err) {
-        reject(err);
-      } else {
-        resolve(value as T);
-      }
-    };
-
-    const client = new GatewayClient({
+  try {
+    return await callGatewayAttempt<T>({
+      opts,
+      connectionDetails,
+      timeoutMs,
+      safeTimerTimeoutMs,
       url,
       token,
       password,
       tlsFingerprint,
-      instanceId: opts.instanceId ?? randomUUID(),
-      clientName: opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI,
-      clientDisplayName: opts.clientDisplayName,
-      clientVersion: opts.clientVersion ?? "dev",
-      platform: opts.platform,
-      mode: opts.mode ?? GATEWAY_CLIENT_MODES.CLI,
-      role: "operator",
-      scopes: ["operator.admin", "operator.approvals", "operator.pairing"],
-      deviceIdentity: loadOrCreateDeviceIdentity(),
-      minProtocol: opts.minProtocol ?? PROTOCOL_VERSION,
-      maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,
-      onHelloOk: async () => {
-        try {
-          const result = await client.request<T>(opts.method, opts.params, {
-            expectFinal: opts.expectFinal,
-          });
-          ignoreClose = true;
-          stop(undefined, result);
-          client.stop();
-        } catch (err) {
-          ignoreClose = true;
-          client.stop();
-          stop(err as Error);
-        }
-      },
-      onClose: (code, reason) => {
-        if (settled || ignoreClose) {
-          return;
-        }
-        ignoreClose = true;
-        client.stop();
-        stop(new Error(formatCloseError(code, reason)));
-      },
     });
-
-    const timer = setTimeout(() => {
-      ignoreClose = true;
-      client.stop();
-      stop(new Error(formatTimeoutError()));
-    }, safeTimerTimeoutMs);
-
-    client.start();
-  });
+  } catch (error) {
+    if (!canFallbackToLoopback || !isRetryableTransportFailure(error)) {
+      throw error;
+    }
+    const fallbackDetails = buildLoopbackFallbackDetails({
+      config,
+      configPath: opts.configPath,
+    });
+    try {
+      return await callGatewayAttempt<T>({
+        opts,
+        connectionDetails: fallbackDetails,
+        timeoutMs,
+        safeTimerTimeoutMs,
+        url: fallbackDetails.url,
+        token,
+        password,
+        tlsFingerprint,
+      });
+    } catch (fallbackError) {
+      if (!(fallbackError instanceof Error)) {
+        throw fallbackError;
+      }
+      const primaryMessage = error instanceof Error ? error.message : String(error);
+      const fallbackMessage = fallbackError.message;
+      throw new Error(
+        [
+          "gateway connection failed on both LAN and loopback targets",
+          "Primary attempt (LAN):",
+          primaryMessage,
+          "Fallback attempt (loopback):",
+          fallbackMessage,
+        ].join("\n"),
+        { cause: error },
+      );
+    }
+  }
 }
 
 export function randomIdempotencyKey() {

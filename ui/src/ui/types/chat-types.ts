@@ -15,6 +15,7 @@ export type MessageGroup = {
   key: string;
   role: string;
   messages: Array<{ message: unknown; key: string }>;
+  assistantAvatar?: string | null;
   timestamp: number;
   isStreaming: boolean;
 };

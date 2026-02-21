@@ -27,6 +27,14 @@ export function buildControlUiAvatarUrl(basePath: string, agentId: string): stri
 }
 
 function looksLikeLocalAvatarPath(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return false;
+  }
+  // Support directory-style avatar values like `avatars` in addition to file paths.
+  if (/^[a-z0-9][a-z0-9._-]*$/.test(trimmed) && trimmed === trimmed.toLowerCase()) {
+    return true;
+  }
   if (/[\\/]/.test(value)) {
     return true;
   }

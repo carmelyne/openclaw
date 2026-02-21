@@ -91,8 +91,8 @@ function installHooks() {
 }
 
 export function toSanitizedMarkdownHtml(markdown: string): string {
-  const input = markdown.trim();
-  if (!input) {
+  const input = markdown;
+  if (!input.trim()) {
     return "";
   }
   installHooks();

@@ -7,7 +7,6 @@ import type { SessionsListResult } from "./types.ts";
 import { refreshChat } from "./app-chat.ts";
 import { syncUrlWithSessionKey } from "./app-settings.ts";
 import { OpenClawApp } from "./app.ts";
-import { ChatState, loadChatHistory } from "./controllers/chat.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
 
@@ -69,6 +68,7 @@ export function renderTab(state: AppViewState, tab: Tab) {
           if (state.sessionKey !== mainSessionKey) {
             resetChatStateForSessionSwitch(state, mainSessionKey);
             void state.loadAssistantIdentity();
+            void refreshChat(state as unknown as Parameters<typeof refreshChat>[0]);
           }
         }
         state.setTab(tab);
@@ -152,7 +152,7 @@ export function renderChatControls(state: AppViewState) {
               next,
               true,
             );
-            void loadChatHistory(state as unknown as ChatState);
+            void refreshChat(state as unknown as Parameters<typeof refreshChat>[0]);
           }}
         >
           ${repeat(

@@ -7,6 +7,13 @@ describe("toSanitizedMarkdownHtml", () => {
     expect(html).toContain("<strong>world</strong>");
   });
 
+  it("preserves single-line breaks as <br> in chat text", () => {
+    const html = toSanitizedMarkdownHtml("line one\nline two");
+    expect(html).toContain("<br>");
+    expect(html).toContain("line one");
+    expect(html).toContain("line two");
+  });
+
   it("strips scripts and unsafe links", () => {
     const html = toSanitizedMarkdownHtml(
       [

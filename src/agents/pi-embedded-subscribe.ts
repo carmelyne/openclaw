@@ -136,10 +136,6 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     if (trimmed && trimmed === state.lastAssistantTextTrimmed) {
       return true;
     }
-    const normalized = normalizeTextForComparison(text);
-    if (normalized.length > 0 && normalized === state.lastAssistantTextNormalized) {
-      return true;
-    }
     return false;
   };
 

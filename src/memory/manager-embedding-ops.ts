@@ -41,6 +41,58 @@ const vectorToBlob = (embedding: number[]): Buffer =>
 
 const log = createSubsystemLogger("memory");
 
+function isLocalOrPrivateHost(host: string): boolean {
+  const normalized = host.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  if (
+    normalized === "localhost" ||
+    normalized === "::1" ||
+    normalized === "0.0.0.0" ||
+    normalized.endsWith(".local")
+  ) {
+    return true;
+  }
+  if (normalized === "127.0.0.1" || normalized.startsWith("127.")) {
+    return true;
+  }
+  const ipv4 = normalized.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (!ipv4) {
+    return false;
+  }
+  const a = Number.parseInt(ipv4[1], 10);
+  const b = Number.parseInt(ipv4[2], 10);
+  if (a === 10 || a === 127) {
+    return true;
+  }
+  if (a === 192 && b === 168) {
+    return true;
+  }
+  if (a === 172 && b >= 16 && b <= 31) {
+    return true;
+  }
+  return false;
+}
+
+function isLikelyLocalBaseUrl(baseUrl?: string): boolean {
+  if (!baseUrl || !baseUrl.trim()) {
+    return false;
+  }
+  try {
+    const parsed = new URL(baseUrl);
+    return isLocalOrPrivateHost(parsed.hostname);
+  } catch {
+    const lower = baseUrl.toLowerCase();
+    return (
+      lower.includes("localhost") ||
+      lower.includes("127.0.0.1") ||
+      lower.includes("0.0.0.0") ||
+      lower.includes(".local")
+    );
+  }
+}
+
 class MemoryManagerEmbeddingOps {
   [key: string]: any;
   private buildEmbeddingBatches(chunks: MemoryChunk[]): MemoryChunk[][] {
@@ -506,6 +558,17 @@ class MemoryManagerEmbeddingOps {
         );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
+        if (this.isBatchTimeoutError(message) && texts.length > 1) {
+          const midpoint = Math.ceil(texts.length / 2);
+          const left = texts.slice(0, midpoint);
+          const right = texts.slice(midpoint);
+          log.warn(
+            `memory embeddings: splitting timed-out batch (${texts.length} -> ${left.length}+${right.length})`,
+          );
+          const leftEmbeddings = await this.embedBatchWithRetry(left);
+          const rightEmbeddings = await this.embedBatchWithRetry(right);
+          return [...leftEmbeddings, ...rightEmbeddings];
+        }
         if (!this.isRetryableEmbeddingError(message) || attempt >= EMBEDDING_RETRY_MAX_ATTEMPTS) {
           throw err;
         }
@@ -528,7 +591,11 @@ class MemoryManagerEmbeddingOps {
   }
 
   private resolveEmbeddingTimeout(kind: "query" | "batch"): number {
-    const isLocal = this.provider.id === "local";
+    const isLocal =
+      this.provider.id === "local" ||
+      isLikelyLocalBaseUrl(this.openAi?.baseUrl) ||
+      isLikelyLocalBaseUrl(this.gemini?.baseUrl) ||
+      isLikelyLocalBaseUrl(this.voyage?.baseUrl);
     if (kind === "query") {
       return isLocal ? EMBEDDING_QUERY_TIMEOUT_LOCAL_MS : EMBEDDING_QUERY_TIMEOUT_REMOTE_MS;
     }

@@ -18,8 +18,16 @@ import {
 } from "./control-ui-shared.js";
 
 const ROOT_PREFIX = "/";
+const LEGACY_UI_PREFIX = "/ui";
+const WORKSPACE_PREFIX = "/workspace/";
 const WORKSPACE_AUDIO_PREFIX = "/workspace/audio/";
 const WORKSPACE_AUDIO_EXTENSIONS = new Set([".wav", ".mp3", ".ogg", ".m4a", ".flac", ".aac"]);
+const WORKSPACE_NOTIFY_FILENAMES = new Set([
+  "notify-start.wav",
+  "notify-start.mp3",
+  "notify-end.wav",
+  "notify-end.mp3",
+]);
 
 export type ControlUiRequestOptions = {
   basePath?: string;
@@ -107,7 +115,10 @@ function isValidAgentId(agentId: string): boolean {
 export function handleControlUiAvatarRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  opts: { basePath?: string; resolveAvatar: (agentId: string) => ControlUiAvatarResolution },
+  opts: {
+    basePath?: string;
+    resolveAvatar: (agentId: string, params?: { advance?: boolean }) => ControlUiAvatarResolution;
+  },
 ): boolean {
   const urlRaw = req.url;
   if (!urlRaw) {
@@ -137,10 +148,10 @@ export function handleControlUiAvatarRequest(
   }
 
   if (url.searchParams.get("meta") === "1") {
-    const resolved = opts.resolveAvatar(agentId);
+    const resolved = opts.resolveAvatar(agentId, { advance: true });
     const avatarUrl =
       resolved.kind === "local"
-        ? buildControlUiAvatarUrl(basePath, agentId)
+        ? buildVersionedControlUiAvatarUrl(basePath, agentId, resolved.filePath)
         : resolved.kind === "remote" || resolved.kind === "data"
           ? resolved.url
           : null;
@@ -148,7 +159,7 @@ export function handleControlUiAvatarRequest(
     return true;
   }
 
-  const resolved = opts.resolveAvatar(agentId);
+  const resolved = opts.resolveAvatar(agentId, { advance: false });
   if (resolved.kind !== "local") {
     respondNotFound(res);
     return true;
@@ -164,6 +175,21 @@ export function handleControlUiAvatarRequest(
 
   serveFile(res, resolved.filePath);
   return true;
+}
+
+function buildVersionedControlUiAvatarUrl(
+  basePath: string,
+  agentId: string,
+  filePath: string,
+): string {
+  const baseUrl = buildControlUiAvatarUrl(basePath, agentId);
+  try {
+    const stat = fs.statSync(filePath);
+    const version = `${path.basename(filePath)}:${Math.floor(stat.mtimeMs)}:${stat.size}`;
+    return `${baseUrl}?v=${encodeURIComponent(version)}`;
+  } catch {
+    return baseUrl;
+  }
 }
 
 function respondNotFound(res: ServerResponse) {
@@ -205,10 +231,58 @@ function resolveWorkspaceAudioPathnamePrefix(basePath: string): string {
   return basePath ? `${basePath}${WORKSPACE_AUDIO_PREFIX}` : WORKSPACE_AUDIO_PREFIX;
 }
 
+function resolveWorkspacePathnamePrefix(basePath: string): string {
+  return basePath ? `${basePath}${WORKSPACE_PREFIX}` : WORKSPACE_PREFIX;
+}
+
 type WorkspaceAudioResolution =
   | { kind: "not-request" }
   | { kind: "invalid" }
   | { kind: "file"; filePath: string };
+
+function normalizeWorkspaceRequestPathname(pathname: string, basePath: string): string {
+  if (basePath) {
+    return pathname;
+  }
+  if (pathname.startsWith(`${LEGACY_UI_PREFIX}${WORKSPACE_PREFIX}`)) {
+    return pathname.slice(LEGACY_UI_PREFIX.length);
+  }
+  return pathname;
+}
+
+function resolveWorkspaceLegacyNotifyFile(
+  pathname: string,
+  opts: ControlUiRequestOptions | undefined,
+  basePath: string,
+): WorkspaceAudioResolution {
+  const normalizedPathname = normalizeWorkspaceRequestPathname(pathname, basePath);
+  const pathPrefix = resolveWorkspacePathnamePrefix(basePath);
+  if (!normalizedPathname.startsWith(pathPrefix)) {
+    return { kind: "not-request" };
+  }
+  const rel = normalizedPathname.slice(pathPrefix.length);
+  if (!rel || rel.endsWith("/") || rel.includes("/") || !isSafeRelativePath(rel)) {
+    return { kind: "not-request" };
+  }
+  if (!WORKSPACE_NOTIFY_FILENAMES.has(rel)) {
+    return { kind: "not-request" };
+  }
+  const cfg = opts?.config;
+  if (!cfg) {
+    return { kind: "invalid" };
+  }
+  const ext = path.extname(rel).toLowerCase();
+  if (!WORKSPACE_AUDIO_EXTENSIONS.has(ext)) {
+    return { kind: "invalid" };
+  }
+  const agentId = opts?.agentId?.trim() || resolveDefaultAgentId(cfg);
+  const workspaceDir = path.resolve(resolveAgentWorkspaceDir(cfg, agentId));
+  const filePath = path.resolve(path.join(workspaceDir, rel));
+  if (!isInsideDir(workspaceDir, filePath)) {
+    return { kind: "invalid" };
+  }
+  return { kind: "file", filePath };
+}
 
 function isInsideDir(rootDir: string, candidatePath: string): boolean {
   const root = path.resolve(rootDir);
@@ -224,15 +298,16 @@ function resolveWorkspaceAudioFile(
   opts: ControlUiRequestOptions | undefined,
   basePath: string,
 ): WorkspaceAudioResolution {
+  const normalizedPathname = normalizeWorkspaceRequestPathname(pathname, basePath);
   const pathPrefix = resolveWorkspaceAudioPathnamePrefix(basePath);
-  if (!pathname.startsWith(pathPrefix)) {
+  if (!normalizedPathname.startsWith(pathPrefix)) {
     return { kind: "not-request" };
   }
   const cfg = opts?.config;
   if (!cfg) {
     return { kind: "invalid" };
   }
-  const rel = pathname.slice(pathPrefix.length);
+  const rel = normalizedPathname.slice(pathPrefix.length);
   if (!rel || rel.endsWith("/") || !isSafeRelativePath(rel)) {
     return { kind: "invalid" };
   }
@@ -271,7 +346,13 @@ export function handleControlUiHttpRequest(
   const pathname = url.pathname;
 
   if (!basePath) {
-    if (pathname === "/ui" || pathname.startsWith("/ui/")) {
+    const isLegacyUiWorkspaceAudio =
+      pathname.startsWith(`${LEGACY_UI_PREFIX}${WORKSPACE_PREFIX}`) ||
+      pathname.startsWith(`${LEGACY_UI_PREFIX}${WORKSPACE_AUDIO_PREFIX}`);
+    if (
+      (pathname === LEGACY_UI_PREFIX || pathname.startsWith(`${LEGACY_UI_PREFIX}/`)) &&
+      !isLegacyUiWorkspaceAudio
+    ) {
       applyControlUiSecurityHeaders(res);
       respondNotFound(res);
       return true;
@@ -292,6 +373,28 @@ export function handleControlUiHttpRequest(
   }
 
   applyControlUiSecurityHeaders(res);
+  const workspaceNotify = resolveWorkspaceLegacyNotifyFile(pathname, opts, basePath);
+  if (workspaceNotify.kind === "invalid") {
+    respondNotFound(res);
+    return true;
+  }
+  if (workspaceNotify.kind === "file") {
+    const filePath = workspaceNotify.filePath;
+    if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+      respondNotFound(res);
+      return true;
+    }
+    if (req.method === "HEAD") {
+      res.statusCode = 200;
+      res.setHeader("Content-Type", contentTypeForExt(path.extname(filePath).toLowerCase()));
+      res.setHeader("Cache-Control", "no-cache");
+      res.end();
+      return true;
+    }
+    serveFile(res, filePath);
+    return true;
+  }
+
   const workspaceAudio = resolveWorkspaceAudioFile(pathname, opts, basePath);
   if (workspaceAudio.kind === "invalid") {
     respondNotFound(res);

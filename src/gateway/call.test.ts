@@ -11,10 +11,14 @@ let lastClientOptions: {
   token?: string;
   password?: string;
   onHelloOk?: () => void | Promise<void>;
+  onConnectError?: (err: Error) => void;
   onClose?: (code: number, reason: string) => void;
 } | null = null;
 type StartMode = "hello" | "close" | "silent";
 let startMode: StartMode = "hello";
+const startModeByUrl = new Map<string, StartMode>();
+const requestErrorByUrl = new Map<string, string>();
+const startedClientUrls: string[] = [];
 let closeCode = 1006;
 let closeReason = "";
 
@@ -51,17 +55,30 @@ vi.mock("./client.js", () => ({
       token?: string;
       password?: string;
       onHelloOk?: () => void | Promise<void>;
+      onConnectError?: (err: Error) => void;
       onClose?: (code: number, reason: string) => void;
     }) {
       lastClientOptions = opts;
     }
     async request() {
+      const url = lastClientOptions?.url;
+      if (url) {
+        const message = requestErrorByUrl.get(url);
+        if (message) {
+          throw new Error(message);
+        }
+      }
       return { ok: true };
     }
     start() {
-      if (startMode === "hello") {
+      const mode =
+        (lastClientOptions?.url && startModeByUrl.get(lastClientOptions.url)) ?? startMode;
+      if (lastClientOptions?.url) {
+        startedClientUrls.push(lastClientOptions.url);
+      }
+      if (mode === "hello") {
         void lastClientOptions?.onHelloOk?.();
-      } else if (startMode === "close") {
+      } else if (mode === "close") {
         lastClientOptions?.onClose?.(closeCode, closeReason);
       }
     }
@@ -79,6 +96,9 @@ describe("callGateway url resolution", () => {
     pickPrimaryLanIPv4.mockReset();
     lastClientOptions = null;
     startMode = "hello";
+    startModeByUrl.clear();
+    requestErrorByUrl.clear();
+    startedClientUrls.length = 0;
     closeCode = 1006;
     closeReason = "";
   });
@@ -133,6 +153,45 @@ describe("callGateway url resolution", () => {
     await callGateway({ method: "health" });
 
     expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18800");
+  });
+
+  it("retries once on loopback when LAN transport fails before request dispatch", async () => {
+    loadConfig.mockReturnValue({ gateway: { mode: "local", bind: "lan" } });
+    resolveGatewayPort.mockReturnValue(18800);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+    pickPrimaryLanIPv4.mockReturnValue("192.168.1.42");
+    startModeByUrl.set("ws://192.168.1.42:18800", "close");
+    startModeByUrl.set("ws://127.0.0.1:18800", "hello");
+
+    await callGateway({ method: "health" });
+
+    expect(startedClientUrls).toEqual(["ws://192.168.1.42:18800", "ws://127.0.0.1:18800"]);
+    expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18800");
+  });
+
+  it("does not retry on loopback when request handling already started", async () => {
+    loadConfig.mockReturnValue({ gateway: { mode: "local", bind: "lan" } });
+    resolveGatewayPort.mockReturnValue(18800);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+    pickPrimaryLanIPv4.mockReturnValue("192.168.1.42");
+    requestErrorByUrl.set("ws://192.168.1.42:18800", "method failed");
+
+    await expect(callGateway({ method: "health" })).rejects.toThrow("method failed");
+    expect(startedClientUrls).toEqual(["ws://192.168.1.42:18800"]);
+  });
+
+  it("reports both errors when LAN and loopback fallback both fail", async () => {
+    loadConfig.mockReturnValue({ gateway: { mode: "local", bind: "lan" } });
+    resolveGatewayPort.mockReturnValue(18800);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+    pickPrimaryLanIPv4.mockReturnValue("192.168.1.42");
+    startModeByUrl.set("ws://192.168.1.42:18800", "close");
+    startModeByUrl.set("ws://127.0.0.1:18800", "close");
+
+    await expect(callGateway({ method: "health" })).rejects.toThrow(
+      "gateway connection failed on both LAN and loopback targets",
+    );
+    expect(startedClientUrls).toEqual(["ws://192.168.1.42:18800", "ws://127.0.0.1:18800"]);
   });
 
   it("uses url override in remote mode even when remote url is missing", async () => {
@@ -241,6 +300,9 @@ describe("callGateway error details", () => {
     pickPrimaryLanIPv4.mockReset();
     lastClientOptions = null;
     startMode = "hello";
+    startModeByUrl.clear();
+    requestErrorByUrl.clear();
+    startedClientUrls.length = 0;
     closeCode = 1006;
     closeReason = "";
   });
@@ -342,6 +404,9 @@ describe("callGateway url override auth requirements", () => {
     pickPrimaryLanIPv4.mockReset();
     lastClientOptions = null;
     startMode = "hello";
+    startModeByUrl.clear();
+    requestErrorByUrl.clear();
+    startedClientUrls.length = 0;
     closeCode = 1006;
     closeReason = "";
     resolveGatewayPort.mockReturnValue(18789);
@@ -379,6 +444,9 @@ describe("callGateway password resolution", () => {
     pickPrimaryLanIPv4.mockReset();
     lastClientOptions = null;
     startMode = "hello";
+    startModeByUrl.clear();
+    requestErrorByUrl.clear();
+    startedClientUrls.length = 0;
     closeCode = 1006;
     closeReason = "";
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
@@ -478,6 +546,9 @@ describe("callGateway token resolution", () => {
     pickPrimaryLanIPv4.mockReset();
     lastClientOptions = null;
     startMode = "hello";
+    startModeByUrl.clear();
+    requestErrorByUrl.clear();
+    startedClientUrls.length = 0;
     closeCode = 1006;
     closeReason = "";
     delete process.env.OPENCLAW_GATEWAY_TOKEN;

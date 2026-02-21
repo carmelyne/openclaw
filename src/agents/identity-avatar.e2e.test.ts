@@ -107,4 +107,42 @@ describe("resolveAgentAvatar", () => {
     const data = resolveAgentAvatar(cfg, "data");
     expect(data.kind).toBe("data");
   });
+
+  it("rotates local avatars when a directory is configured", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-avatar-"));
+    const workspace = path.join(root, "work");
+    await writeFile(path.join(workspace, "avatars", "01.png"));
+    await writeFile(path.join(workspace, "avatars", "02.png"));
+    await writeFile(path.join(workspace, "avatars", "03.png"));
+
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main", workspace, identity: { avatar: "avatars" } }],
+      },
+    };
+
+    const firstMeta = resolveAgentAvatar(cfg, "main", { advance: true });
+    expect(firstMeta.kind).toBe("local");
+    if (firstMeta.kind === "local") {
+      expect(path.basename(firstMeta.filePath)).toBe("01.png");
+    }
+
+    const firstFetch = resolveAgentAvatar(cfg, "main", { advance: false });
+    expect(firstFetch.kind).toBe("local");
+    if (firstFetch.kind === "local") {
+      expect(path.basename(firstFetch.filePath)).toBe("01.png");
+    }
+
+    const secondMeta = resolveAgentAvatar(cfg, "main", { advance: true });
+    expect(secondMeta.kind).toBe("local");
+    if (secondMeta.kind === "local") {
+      expect(path.basename(secondMeta.filePath)).toBe("02.png");
+    }
+
+    const secondFetch = resolveAgentAvatar(cfg, "main", { advance: false });
+    expect(secondFetch.kind).toBe("local");
+    if (secondFetch.kind === "local") {
+      expect(path.basename(secondFetch.filePath)).toBe("02.png");
+    }
+  });
 });

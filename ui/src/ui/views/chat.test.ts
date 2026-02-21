@@ -201,4 +201,89 @@ describe("chat view", () => {
     const toggle = container.querySelector(".chat-usage-toggle");
     expect(toggle).not.toBeNull();
   });
+
+  it("keeps usage meter collapsed when usageExpanded is omitted", () => {
+    const container = document.createElement("div");
+    const props = createProps({
+      usageExpanded: undefined,
+      usageLastTurnTokens: 123,
+      usageCumulativeTokens: 456,
+    });
+    render(renderChat(props), container);
+    expect(container.querySelector(".chat-usage-meter")).toBeNull();
+  });
+
+  it("shows active provider/model badge for the current session", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          sessions: {
+            ts: 0,
+            path: "",
+            count: 1,
+            defaults: { model: "openai/gpt-4o", contextTokens: null },
+            sessions: [
+              {
+                key: "main",
+                kind: "direct",
+                updatedAt: null,
+                model: "gpt-4o",
+                modelProvider: "openai",
+              },
+            ],
+          },
+        }),
+      ),
+      container,
+    );
+
+    const chip = container.querySelector(".chat-model-chip");
+    expect(chip).not.toBeNull();
+    expect(chip?.textContent).toContain("Model: openai/gpt-4o");
+  });
+
+  it("falls back to default model when active session model is unavailable", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          sessions: {
+            ts: 0,
+            path: "",
+            count: 0,
+            defaults: { model: "ollama/kimi-k2.5:cloud", contextTokens: null },
+            sessions: [],
+          },
+        }),
+      ),
+      container,
+    );
+
+    const chip = container.querySelector(".chat-model-chip");
+    expect(chip).not.toBeNull();
+    expect(chip?.textContent).toContain("Model: ollama/kimi-k2.5:cloud");
+  });
+
+  it("renders assistant provider errors when content is empty", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          messages: [
+            {
+              role: "assistant",
+              content: [],
+              errorMessage: "You exceeded your current quota.",
+              timestamp: Date.now(),
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    expect(container.textContent).toContain("Provider error: You exceeded your current quota.");
+    expect(container.querySelector(".chat-bubble.error")).not.toBeNull();
+  });
 });

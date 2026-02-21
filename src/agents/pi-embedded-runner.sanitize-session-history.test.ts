@@ -309,4 +309,56 @@ describe("sanitizeSessionHistory", () => {
       ),
     ).toBe(false);
   });
+
+  it("replaces historical memory_search payloads with a compact placeholder", async () => {
+    const messages: AgentMessage[] = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "tool_mem", name: "memory_search", arguments: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "tool_mem",
+        toolName: "memory_search",
+        content: [{ type: "text", text: '{ "results": [ ... large payload ... ] }' }],
+      } as unknown as AgentMessage,
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "tool_read", name: "read", arguments: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "tool_read",
+        toolName: "read",
+        content: [{ type: "text", text: "keep this tool output" }],
+      } as unknown as AgentMessage,
+      { role: "user", content: "continue" },
+    ];
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-responses",
+      provider: "openai",
+      sessionManager: mockSessionManager,
+      sessionId: "test-session",
+    });
+
+    const memoryToolResult = result.find(
+      (msg) =>
+        msg.role === "toolResult" && (msg as { toolName?: string }).toolName === "memory_search",
+    ) as Extract<AgentMessage, { role: "toolResult" }> | undefined;
+    const readToolResult = result.find(
+      (msg) => msg.role === "toolResult" && (msg as { toolName?: string }).toolName === "read",
+    ) as Extract<AgentMessage, { role: "toolResult" }> | undefined;
+
+    expect(memoryToolResult).toBeTruthy();
+    expect(readToolResult).toBeTruthy();
+    expect(memoryToolResult?.content).toEqual([
+      {
+        type: "text",
+        text: "[memory_search result omitted from prior context. Re-run memory_search for fresh recall.]",
+      },
+    ]);
+    expect(readToolResult?.content).toEqual([{ type: "text", text: "keep this tool output" }]);
+  });
 });

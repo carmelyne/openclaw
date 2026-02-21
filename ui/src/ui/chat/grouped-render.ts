@@ -18,6 +18,78 @@ type ImageBlock = {
   alt?: string;
 };
 
+type YoutubeEmbed = {
+  id: string;
+  embedUrl: string;
+};
+
+const YOUTUBE_HOSTS = new Set([
+  "youtube.com",
+  "www.youtube.com",
+  "m.youtube.com",
+  "music.youtube.com",
+  "youtu.be",
+  "www.youtu.be",
+]);
+
+const YOUTUBE_ID_RE = /^[A-Za-z0-9_-]{11}$/;
+
+function trimTrailingUrlPunctuation(value: string): string {
+  return value.replace(/[),.!?:;'"\]]+$/g, "");
+}
+
+function normalizeYoutubeId(raw: string | null | undefined): string | null {
+  const value = (raw ?? "").trim();
+  if (!value) {
+    return null;
+  }
+  return YOUTUBE_ID_RE.test(value) ? value : null;
+}
+
+function extractYoutubeIdFromUrl(rawUrl: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return null;
+  }
+  if (!/^https?:$/i.test(parsed.protocol)) {
+    return null;
+  }
+  const host = parsed.hostname.toLowerCase();
+  if (!YOUTUBE_HOSTS.has(host)) {
+    return null;
+  }
+  if (host === "youtu.be" || host === "www.youtu.be") {
+    const pathId = parsed.pathname.split("/").filter(Boolean)[0];
+    return normalizeYoutubeId(pathId);
+  }
+  const fromWatch = normalizeYoutubeId(parsed.searchParams.get("v"));
+  if (fromWatch) {
+    return fromWatch;
+  }
+  const parts = parsed.pathname.split("/").filter(Boolean);
+  if (parts.length >= 2 && (parts[0] === "shorts" || parts[0] === "embed" || parts[0] === "live")) {
+    return normalizeYoutubeId(parts[1]);
+  }
+  return null;
+}
+
+export function extractYoutubeEmbed(text: string): YoutubeEmbed | null {
+  const matches = text.match(/https?:\/\/[^\s<>()]+/gi) ?? [];
+  for (const candidate of matches) {
+    const cleaned = trimTrailingUrlPunctuation(candidate);
+    const id = extractYoutubeIdFromUrl(cleaned);
+    if (id) {
+      return {
+        id,
+        embedUrl: `https://www.youtube-nocookie.com/embed/${id}`,
+      };
+    }
+  }
+  return null;
+}
+
 function extractImages(message: unknown): ImageBlock[] {
   const m = message as Record<string, unknown>;
   const content = m.content;
@@ -236,16 +308,22 @@ function renderGroupedMessage(
   const hasImages = images.length > 0;
 
   const extractedText = extractTextCached(message);
+  const errorMessage =
+    typeof m.errorMessage === "string" && m.errorMessage.trim().length > 0
+      ? m.errorMessage.trim()
+      : null;
   const extractedThinking =
     opts.showReasoning && role === "assistant" ? extractThinkingCached(message) : null;
   const markdownBase = extractedText?.trim() ? extractedText : null;
+  const markdown = markdownBase ?? (errorMessage ? `Provider error: ${errorMessage}` : null);
   const reasoningMarkdown = extractedThinking ? formatReasoningMarkdown(extractedThinking) : null;
-  const markdown = markdownBase;
+  const youtube = markdown ? extractYoutubeEmbed(markdown) : null;
   const canCopyMarkdown = role === "assistant" && Boolean(markdown?.trim());
 
   const bubbleClasses = [
     "chat-bubble",
     canCopyMarkdown ? "has-copy" : "",
+    errorMessage ? "error" : "",
     opts.isStreaming ? "streaming" : "",
     "fade-in",
   ]
@@ -274,6 +352,20 @@ function renderGroupedMessage(
       ${
         markdown
           ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">${unsafeHTML(toSanitizedMarkdownHtml(markdown))}</div>`
+          : nothing
+      }
+      ${
+        youtube
+          ? html`<div class="chat-youtube">
+              <iframe
+                src=${youtube.embedUrl}
+                title="YouTube video"
+                loading="lazy"
+                referrerpolicy="strict-origin-when-cross-origin"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                allowfullscreen
+              ></iframe>
+            </div>`
           : nothing
       }
       ${toolCards.map((card) => renderToolCardSidebar(card, onOpenSidebar))}

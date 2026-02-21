@@ -43,13 +43,18 @@ export function parseInlineDirectives(
   let audioAsVoice = false;
   let hasAudioTag = false;
   let hasReplyTag = false;
+  let didStripDirective = false;
   let sawCurrent = false;
   let lastExplicitId: string | undefined;
 
   cleaned = cleaned.replace(AUDIO_TAG_RE, (match) => {
     audioAsVoice = true;
     hasAudioTag = true;
-    return stripAudioTag ? " " : match;
+    if (stripAudioTag) {
+      didStripDirective = true;
+      return " ";
+    }
+    return match;
   });
 
   cleaned = cleaned.replace(REPLY_TAG_RE, (match, idRaw: string | undefined) => {
@@ -62,10 +67,16 @@ export function parseInlineDirectives(
         lastExplicitId = id;
       }
     }
-    return stripReplyTags ? " " : match;
+    if (stripReplyTags) {
+      didStripDirective = true;
+      return " ";
+    }
+    return match;
   });
 
-  cleaned = normalizeDirectiveWhitespace(cleaned);
+  if (didStripDirective) {
+    cleaned = normalizeDirectiveWhitespace(cleaned);
+  }
 
   const replyToId =
     lastExplicitId ?? (sawCurrent ? currentMessageId?.trim() || undefined : undefined);

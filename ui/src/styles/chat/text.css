@@ -123,6 +123,21 @@
   margin: 1em 0;
 }
 
+.chat-youtube {
+  margin-top: 10px;
+  border-radius: 10px;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.18);
+  border: 1px solid var(--border);
+}
+
+.chat-youtube iframe {
+  display: block;
+  width: min(560px, 100%);
+  aspect-ratio: 16 / 9;
+  border: 0;
+}
+
 /* =============================================
    RTL (Right-to-Left) SUPPORT
    ============================================= */

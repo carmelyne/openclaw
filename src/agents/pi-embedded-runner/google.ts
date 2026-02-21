@@ -50,6 +50,8 @@ const GOOGLE_SCHEMA_UNSUPPORTED_KEYWORDS = new Set([
 ]);
 const ANTIGRAVITY_SIGNATURE_RE = /^[A-Za-z0-9+/]+={0,2}$/;
 const INTER_SESSION_PREFIX_BASE = "[Inter-session message]";
+const MEMORY_SEARCH_HISTORY_PLACEHOLDER =
+  "[memory_search result omitted from prior context. Re-run memory_search for fresh recall.]";
 
 function isValidAntigravitySignature(value: unknown): value is string {
   if (typeof value !== "string") {
@@ -444,6 +446,7 @@ export async function sanitizeSessionHistory(params: {
     ? sanitizeToolUseResultPairing(sanitizedToolCalls)
     : sanitizedToolCalls;
   const sanitizedToolResults = stripToolResultDetails(repairedTools);
+  const compactedMemorySearch = compactHistoricalMemorySearchToolResults(sanitizedToolResults);
 
   const isOpenAIResponsesApi =
     params.modelApi === "openai-responses" || params.modelApi === "openai-codex-responses";
@@ -459,8 +462,8 @@ export async function sanitizeSessionHistory(params: {
     : false;
   const sanitizedOpenAI =
     isOpenAIResponsesApi && modelChanged
-      ? downgradeOpenAIReasoningBlocks(sanitizedToolResults)
-      : sanitizedToolResults;
+      ? downgradeOpenAIReasoningBlocks(compactedMemorySearch)
+      : compactedMemorySearch;
 
   if (hasSnapshot && (!priorSnapshot || modelChanged)) {
     appendModelSnapshot(params.sessionManager, {
@@ -481,4 +484,23 @@ export async function sanitizeSessionHistory(params: {
     sessionManager: params.sessionManager,
     sessionId: params.sessionId,
   }).messages;
+}
+
+function compactHistoricalMemorySearchToolResults(messages: AgentMessage[]): AgentMessage[] {
+  let changed = false;
+  const next = messages.map((message) => {
+    if (!message || message.role !== "toolResult") {
+      return message;
+    }
+    const toolName = typeof message.toolName === "string" ? message.toolName : "";
+    if (toolName !== "memory_search") {
+      return message;
+    }
+    changed = true;
+    return {
+      ...message,
+      content: [{ type: "text", text: MEMORY_SEARCH_HISTORY_PLACEHOLDER }],
+    } as AgentMessage;
+  });
+  return changed ? next : messages;
 }

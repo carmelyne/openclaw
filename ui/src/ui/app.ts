@@ -132,7 +132,7 @@ export class OpenClawApp extends LitElement {
   @state() chatUsageLastTurnCost: number | null = null;
   @state() chatUsageCumulativeTokens: number | null = null;
   @state() chatUsageCumulativeCost: number | null = null;
-  @state() chatUsageExpanded = true;
+  @state() chatUsageExpanded = false;
   @state() chatToolMessages: unknown[] = [];
   @state() chatStream: string | null = null;
   @state() chatStreamStartedAt: number | null = null;

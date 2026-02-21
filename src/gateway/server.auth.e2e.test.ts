@@ -576,6 +576,8 @@ describe("gateway server auth/connect", () => {
       },
     });
     expect(res.ok).toBe(true);
+    const health = await rpcReq(ws, "health");
+    expect(health.ok).toBe(true);
     ws.close();
     await server.close();
     if (prevToken === undefined) {

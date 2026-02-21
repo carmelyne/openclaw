@@ -5,7 +5,11 @@ import { formatToolDetail, resolveToolDisplay } from "../tool-display.ts";
 import { TOOL_INLINE_THRESHOLD } from "./constants.ts";
 import { extractTextCached } from "./message-extract.ts";
 import { isToolResultMessage } from "./message-normalizer.ts";
-import { formatToolOutputForSidebar, getTruncatedPreview } from "./tool-helpers.ts";
+import {
+  formatToolOutputForPreview,
+  formatToolOutputForSidebar,
+  getTruncatedPreview,
+} from "./tool-helpers.ts";
 
 export function extractToolCards(message: unknown): ToolCard[] {
   const m = message as Record<string, unknown>;
@@ -51,13 +55,14 @@ export function extractToolCards(message: unknown): ToolCard[] {
 export function renderToolCardSidebar(card: ToolCard, onOpenSidebar?: (content: string) => void) {
   const display = resolveToolDisplay({ name: card.name, args: card.args });
   const detail = formatToolDetail(display);
-  const hasText = Boolean(card.text?.trim());
+  const displayText = card.text ? formatToolOutputForPreview(card.text, card.name) : undefined;
+  const hasText = Boolean(displayText?.trim());
 
   const canClick = Boolean(onOpenSidebar);
   const handleClick = canClick
     ? () => {
         if (hasText) {
-          onOpenSidebar!(formatToolOutputForSidebar(card.text!));
+          onOpenSidebar!(formatToolOutputForSidebar(card.text!, card.name));
           return;
         }
         const info = `## ${display.label}\n\n${
@@ -67,7 +72,7 @@ export function renderToolCardSidebar(card: ToolCard, onOpenSidebar?: (content: 
       }
     : undefined;
 
-  const isShort = hasText && (card.text?.length ?? 0) <= TOOL_INLINE_THRESHOLD;
+  const isShort = hasText && (displayText?.length ?? 0) <= TOOL_INLINE_THRESHOLD;
   const showCollapsed = hasText && !isShort;
   const showInline = hasText && isShort;
   const isEmpty = !hasText;
@@ -112,10 +117,10 @@ export function renderToolCardSidebar(card: ToolCard, onOpenSidebar?: (content: 
       }
       ${
         showCollapsed
-          ? html`<div class="chat-tool-card__preview mono">${getTruncatedPreview(card.text!)}</div>`
+          ? html`<div class="chat-tool-card__preview mono">${getTruncatedPreview(displayText!)}</div>`
           : nothing
       }
-      ${showInline ? html`<div class="chat-tool-card__inline mono">${card.text}</div>` : nothing}
+      ${showInline ? html`<div class="chat-tool-card__inline mono">${displayText}</div>` : nothing}
     </div>
   `;
 }

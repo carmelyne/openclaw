@@ -121,6 +121,9 @@ function resolveIdentityAvatarUrl(
   }
   try {
     const stat = fs.statSync(resolved);
+    if (stat.isDirectory()) {
+      return `/avatar/${encodeURIComponent(agentId)}`;
+    }
     if (!stat.isFile() || stat.size > AVATAR_MAX_BYTES) {
       return undefined;
     }

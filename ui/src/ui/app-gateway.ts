@@ -5,7 +5,11 @@ import type { GatewayEventFrame, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
 import type { UiSettings } from "./storage.ts";
 import type { AgentsListResult, PresenceEntry, HealthSnapshot, StatusSummary } from "./types.ts";
-import { CHAT_SESSIONS_ACTIVE_MINUTES, flushChatQueueForEvent } from "./app-chat.ts";
+import {
+  CHAT_SESSIONS_ACTIVE_MINUTES,
+  flushChatQueueForEvent,
+  refreshChatAvatar,
+} from "./app-chat.ts";
 import {
   applySettings,
   loadCron,
@@ -210,6 +214,7 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
 
   if (evt.event === "chat") {
     const payload = evt.payload as ChatEventPayload | undefined;
+    const runIdBeforeEvent = host.chatRunId;
     if (payload?.sessionKey) {
       setLastActiveSessionKey(
         host as unknown as Parameters<typeof setLastActiveSessionKey>[0],
@@ -242,8 +247,26 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
         }
       }
     }
-    if (state === "final") {
-      void loadChatHistory(host as unknown as OpenClawApp);
+    const isFinalState = state === "final" || payload?.state === "final";
+    if (isFinalState) {
+      const hasFinalMessage = Boolean(
+        payload?.state === "final" &&
+        payload?.message &&
+        typeof payload.message === "object" &&
+        typeof (payload.message as { role?: unknown }).role === "string",
+      );
+      const isOwnRunFinal = Boolean(
+        payload?.state === "final" &&
+        payload?.runId &&
+        runIdBeforeEvent &&
+        payload.runId === runIdBeforeEvent,
+      );
+      void (async () => {
+        await refreshChatAvatar(host as unknown as OpenClawApp);
+        if (!isOwnRunFinal && !hasFinalMessage) {
+          await loadChatHistory(host as unknown as OpenClawApp);
+        }
+      })();
     }
     return;
   }

@@ -177,13 +177,16 @@ export async function sendChatMessage(
   state: ChatState,
   message: string,
   attachments?: ChatAttachment[],
+  opts?: { displayMessage?: string },
 ): Promise<string | null> {
   if (!state.client || !state.connected) {
     return null;
   }
-  const msg = message.trim();
+  const msg = message;
+  const displayMsg = opts?.displayMessage ?? msg;
+  const hasMessageText = msg.trim().length > 0;
   const hasAttachments = attachments && attachments.length > 0;
-  if (!msg && !hasAttachments) {
+  if (!hasMessageText && !hasAttachments) {
     return null;
   }
 
@@ -191,8 +194,8 @@ export async function sendChatMessage(
 
   // Build user message content blocks
   const contentBlocks: Array<{ type: string; text?: string; source?: unknown }> = [];
-  if (msg) {
-    contentBlocks.push({ type: "text", text: msg });
+  if (displayMsg.trim().length > 0) {
+    contentBlocks.push({ type: "text", text: displayMsg });
   }
   // Add image previews to the message for display
   if (hasAttachments) {
@@ -295,6 +298,13 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   // See https://github.com/openclaw/openclaw/issues/1909
   if (payload.runId && state.chatRunId && payload.runId !== state.chatRunId) {
     if (payload.state === "final") {
+      if (
+        payload.message &&
+        typeof payload.message === "object" &&
+        (payload.message as { role?: unknown }).role === "assistant"
+      ) {
+        state.chatMessages = [...state.chatMessages, payload.message];
+      }
       return "final";
     }
     return null;
@@ -309,6 +319,13 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       }
     }
   } else if (payload.state === "final") {
+    if (
+      payload.message &&
+      typeof payload.message === "object" &&
+      (payload.message as { role?: unknown }).role === "assistant"
+    ) {
+      state.chatMessages = [...state.chatMessages, payload.message];
+    }
     state.chatStream = null;
     state.chatRunId = null;
     state.chatStreamStartedAt = null;

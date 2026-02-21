@@ -1,7 +1,7 @@
 import { html, nothing } from "lit";
 import type { AppViewState } from "./app-view-state.ts";
 import { parseAgentSessionKey } from "../../../src/routing/session-key.js";
-import { refreshChatAvatar } from "./app-chat.ts";
+import { refreshChat } from "./app-chat.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
 import { renderChatControls, renderTab, renderThemeToggle } from "./app-render.helpers.ts";
 import { loadAgentFileContent, loadAgentFiles, saveAgentFile } from "./controllers/agent-files.ts";
@@ -9,7 +9,6 @@ import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-iden
 import { loadAgentSkills } from "./controllers/agent-skills.ts";
 import { loadAgents } from "./controllers/agents.ts";
 import { loadChannels } from "./controllers/channels.ts";
-import { loadChatHistory } from "./controllers/chat.ts";
 import {
   applyConfig,
   loadConfig,
@@ -51,7 +50,13 @@ import {
   updateSkillEnabled,
 } from "./controllers/skills.ts";
 import { icons } from "./icons.ts";
-import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
+import {
+  normalizeBasePath,
+  pathForTab,
+  TAB_GROUPS,
+  subtitleForTab,
+  titleForTab,
+} from "./navigation.ts";
 import { renderAgents } from "./views/agents.ts";
 import { renderChannels } from "./views/channels.ts";
 import { renderChat } from "./views/chat.ts";
@@ -86,6 +91,14 @@ function resolveAssistantAvatarUrl(state: AppViewState): string | undefined {
   return identity?.avatarUrl;
 }
 
+const CHAT_SHORTCUTS = [
+  { label: "4o", sessionKey: "agent:main:main" },
+  { label: "Codex", sessionKey: "agent:codex-coder:main" },
+  { label: "GLM", sessionKey: "agent:glm-coder:main" },
+  { label: "Kimi", sessionKey: "agent:kimi-coder:main" },
+  { label: "Nemo", sessionKey: "agent:writer:main" },
+] as const;
+
 export function renderApp(state: AppViewState) {
   const presenceCount = state.presenceEntries.length;
   const sessionsCount = state.sessionsResult?.count ?? null;
@@ -99,11 +112,32 @@ export function renderApp(state: AppViewState) {
   const configValue =
     state.configForm ?? (state.configSnapshot?.config as Record<string, unknown> | null);
   const basePath = normalizeBasePath(state.basePath ?? "");
+  const chatBasePath = pathForTab("chat", state.basePath);
   const resolvedAgentId =
     state.agentsSelectedId ??
     state.agentsList?.defaultId ??
     state.agentsList?.agents?.[0]?.id ??
     null;
+  const switchChatSession = (sessionKey: string) => {
+    if (state.sessionKey === sessionKey && state.tab === "chat") {
+      return;
+    }
+    state.sessionKey = sessionKey;
+    state.chatMessage = "";
+    state.chatStream = null;
+    state.chatStreamStartedAt = null;
+    state.chatRunId = null;
+    state.resetToolStream();
+    state.resetChatScroll();
+    state.applySettings({
+      ...state.settings,
+      sessionKey,
+      lastActiveSessionKey: sessionKey,
+    });
+    state.setTab("chat");
+    void state.loadAssistantIdentity();
+    void refreshChat(state as unknown as Parameters<typeof refreshChat>[0]);
+  };
 
   return html`
     <div class="shell ${isChat ? "shell--chat" : ""} ${chatFocus ? "shell--chat-focus" : ""} ${state.settings.navCollapsed ? "shell--nav-collapsed" : ""} ${state.onboarding ? "shell--onboarding" : ""}">
@@ -141,6 +175,31 @@ export function renderApp(state: AppViewState) {
         </div>
       </header>
       <aside class="nav ${state.settings.navCollapsed ? "nav--collapsed" : ""}">
+        <div class="nav-group">
+          <div class="nav-label nav-label--static">
+            <span class="nav-label__text">Chats</span>
+          </div>
+          <div class="nav-group__items">
+            ${CHAT_SHORTCUTS.map((entry) => {
+              const active = state.tab === "chat" && state.sessionKey === entry.sessionKey;
+              const href = `${chatBasePath}?session=${encodeURIComponent(entry.sessionKey)}`;
+              return html`
+                <a
+                  class="nav-item ${active ? "active" : ""}"
+                  href=${href}
+                  @click=${(event: Event) => {
+                    event.preventDefault();
+                    switchChatSession(entry.sessionKey);
+                  }}
+                  title=${entry.sessionKey}
+                >
+                  <span class="nav-item__icon" aria-hidden="true">${icons.messageSquare}</span>
+                  <span class="nav-item__text">${entry.label}</span>
+                </a>
+              `;
+            })}
+          </div>
+        </div>
         ${TAB_GROUPS.map((group) => {
           const isGroupCollapsed = state.settings.navGroupsCollapsed[group.label] ?? false;
           const hasActiveTab = group.tabs.some((tab) => tab === state.tab);
@@ -800,8 +859,7 @@ export function renderApp(state: AppViewState) {
                     lastActiveSessionKey: next,
                   });
                   void state.loadAssistantIdentity();
-                  void loadChatHistory(state);
-                  void refreshChatAvatar(state);
+                  void refreshChat(state as unknown as Parameters<typeof refreshChat>[0]);
                 },
                 thinkingLevel: state.chatThinkingLevel,
                 showThinking,
@@ -829,7 +887,7 @@ export function renderApp(state: AppViewState) {
                 focusMode: chatFocus,
                 onRefresh: () => {
                   state.resetToolStream();
-                  return Promise.all([loadChatHistory(state), refreshChatAvatar(state)]);
+                  return refreshChat(state as unknown as Parameters<typeof refreshChat>[0]);
                 },
                 onToggleFocusMode: () => {
                   if (state.onboarding) {

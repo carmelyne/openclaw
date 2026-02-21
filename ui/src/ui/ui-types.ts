@@ -7,6 +7,7 @@ export type ChatAttachment = {
 export type ChatQueueItem = {
   id: string;
   text: string;
+  displayText?: string;
   createdAt: number;
   attachments?: ChatAttachment[];
   refreshSessions?: boolean;

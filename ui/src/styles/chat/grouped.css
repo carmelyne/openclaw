@@ -104,6 +104,9 @@
 .chat-avatar.assistant {
   background: var(--secondary);
   color: var(--muted);
+  width: 100px;
+  height: 100px;
+  font-size: 32px;
 }
 
 .chat-avatar.other {
@@ -251,6 +254,15 @@ img.chat-avatar {
 
 .chat-bubble:hover {
   background: var(--bg-hover);
+}
+
+.chat-bubble.error {
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
+  background: color-mix(in srgb, var(--danger-subtle) 45%, transparent);
+}
+
+.chat-bubble.error:hover {
+  background: color-mix(in srgb, var(--danger-subtle) 60%, transparent);
 }
 
 /* User bubbles have different styling */
